@@ -67,4 +67,11 @@ public struct DataSourceSchema: Decodable {
     public var workCategoryName: String? {
         categoryOptionNames.first { $0.range(of: "work", options: .caseInsensitive) != nil }
     }
+
+    /// The personal categories: every Category option except Work. Feeds the
+    /// "Home priorities" preset (#5), which is Pivotal Priorities' mirror.
+    public var personalCategoryNames: [String] {
+        let work = workCategoryName
+        return categoryOptionNames.filter { $0 != work }
+    }
 }

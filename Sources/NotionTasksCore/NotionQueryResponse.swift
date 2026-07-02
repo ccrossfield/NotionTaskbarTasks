@@ -27,7 +27,15 @@ public struct NotionQueryResponse: Decodable {
 
     public struct Page: Decodable {
         public let id: String
+        /// Notion's page-level `created_time` (an ISO datetime), not a property.
+        let createdTime: String?
         public let properties: [String: Property]
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case createdTime = "created_time"
+            case properties
+        }
 
         var asTask: NotionTask {
             let titleProperty = properties.values.first { $0.type == "title" }
@@ -40,7 +48,8 @@ public struct NotionQueryResponse: Decodable {
                 priority: (properties["Priority"]?.select?.name).flatMap(Priority.init(rawValue:)),
                 dueDate: NotionQueryResponse.date(from: properties["Due Date"]?.date?.start),
                 category: properties["Category"]?.select?.name,
-                startFrom: NotionQueryResponse.date(from: properties["Start from"]?.date?.start)
+                startFrom: NotionQueryResponse.date(from: properties["Start from"]?.date?.start),
+                createdTime: NotionQueryResponse.date(from: createdTime)
             )
         }
     }

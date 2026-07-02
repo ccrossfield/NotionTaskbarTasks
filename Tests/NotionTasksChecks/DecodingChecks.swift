@@ -75,4 +75,18 @@ func decodingChecks(_ t: CheckRun) async {
         t.expectEqual(parts.day, 15)
         t.expect(tasks[2].startFrom == nil, "tasks[2] has no Start from, should be nil")
     }
+
+    await t.test("created time decodes from the page's created_time") {
+        let tasks = try JSONDecoder().decode(
+            NotionQueryResponse.self, from: try fixtureData("query_response")).tasks
+        // tasks[0] was created 2026-06-01T09:00:00Z, tasks[1] 2026-06-02.
+        let created = try require(tasks[0].createdTime)
+        let parts = Calendar.current.dateComponents([.year, .month, .day], from: created)
+        t.expectEqual(parts.year, 2026)
+        t.expectEqual(parts.month, 6)
+        t.expectEqual(parts.day, 1)
+        // Ordering is what the Created-sorted presets (#5) rely on.
+        let created1 = try require(tasks[1].createdTime)
+        t.expect(created < created1, "task[0] should be created before task[1]")
+    }
 }

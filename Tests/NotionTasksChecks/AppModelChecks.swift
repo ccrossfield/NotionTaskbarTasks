@@ -137,7 +137,7 @@ func appModelChecks(_ t: CheckRun) async {
         let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
 
         await model.submit(token: "ntn_good")
-        let groups = model.pivotalGroups(today: today, calendar: cal)
+        let groups = model.groups(today: today, calendar: cal)
 
         // Of the 5 fixture tasks, only the two open Work tasks qualify (both are
         // surfaced by this date). "Draft the Q3 board update" is P0, "Wire up the
@@ -147,6 +147,39 @@ func appModelChecks(_ t: CheckRun) async {
         t.expectEqual(groups.first?.tasks.map(\.title), ["Draft the Q3 board update"])
         t.expect(groups.count == 2 && groups[1].tasks.map(\.title) == ["Wire up the menu bar read path"],
                  "P1 group should hold the one open Work P1 task")
+    }
+
+    await t.test("switching preset re-filters the loaded tasks immediately, with no re-fetch") {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "Europe/London")!
+        let today = cal.date(from: DateComponents(year: 2026, month: 7, day: 15, hour: 12))!
+
+        let store = InMemoryTokenStore()
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
+        await model.submit(token: "ntn_good")
+
+        // Default preset is Pivotal Priorities: the two open Work tasks, P0/P1.
+        t.expectEqual(model.preset, .pivotalPriorities)
+        t.expectEqual(model.groups(today: today, calendar: cal).map(\.priority), [.p0, .p1])
+
+        // All open brings back the personal Blocked task Pivotal filtered out, as
+        // a single flat group in Created-descending order — no re-fetch involved.
+        model.selectPreset(.allOpen)
+        let all = model.groups(today: today, calendar: cal)
+        t.expectEqual(all.count, 1)
+        t.expectEqual(all.first?.tasks.map(\.title),
+                      ["Draft the Q3 board update",      // created 2026-06-02
+                       "Wire up the menu bar read path",  // created 2026-06-01
+                       "Chase vendor on renewal quote"])  // created 2026-05-20
+
+        // Home priorities: the personal-category task, grouped by priority.
+        model.selectPreset(.homePriorities)
+        let home = model.groups(today: today, calendar: cal)
+        t.expectEqual(home.map(\.priority), [.p2])
+        t.expectEqual(home.first?.tasks.map(\.title), ["Chase vendor on renewal quote"])
     }
 
     await t.test("a failed write leaves the row unchanged and surfaces an error") {

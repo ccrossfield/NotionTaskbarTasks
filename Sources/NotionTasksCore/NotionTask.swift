@@ -34,6 +34,9 @@ public struct NotionTask: Identifiable, Equatable {
     /// The "Start from" defer date — when a task should surface. Used by the
     /// priority views later; decoded here so it's ready.
     public let startFrom: Date?
+    /// The page's Notion `created_time`. Drives the Created sort in the
+    /// "All open" and "Late or due today" presets (#5).
+    public let createdTime: Date?
 
     public init(
         id: String,
@@ -42,7 +45,8 @@ public struct NotionTask: Identifiable, Equatable {
         priority: Priority? = nil,
         dueDate: Date? = nil,
         category: String? = nil,
-        startFrom: Date? = nil
+        startFrom: Date? = nil,
+        createdTime: Date? = nil
     ) {
         self.id = id
         self.title = title
@@ -51,6 +55,7 @@ public struct NotionTask: Identifiable, Equatable {
         self.dueDate = dueDate
         self.category = category
         self.startFrom = startFrom
+        self.createdTime = createdTime
     }
 
     /// A copy with a new status, keeping every other field. Used by the write
@@ -58,7 +63,8 @@ public struct NotionTask: Identifiable, Equatable {
     public func withStatus(_ newStatus: String?) -> NotionTask {
         NotionTask(
             id: id, title: title, status: newStatus, priority: priority,
-            dueDate: dueDate, category: category, startFrom: startFrom)
+            dueDate: dueDate, category: category, startFrom: startFrom,
+            createdTime: createdTime)
     }
 
     /// The due date rendered relative to `now`: "Overdue" for a past day,

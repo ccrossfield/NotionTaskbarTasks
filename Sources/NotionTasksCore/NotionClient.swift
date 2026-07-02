@@ -26,6 +26,11 @@ public enum NotionConfig {
     /// showing something sensible if that one request doesn't come back.
     public static let fallbackOpenStatuses: Set<String> = ["To Do", "In Progress", "Blocked"]
     public static let fallbackWorkCategory = "👨🏻‍💻 Work"
+    /// Used only if the schema fetch fails: the personal categories for the
+    /// "Home priorities" preset (#5) — every real Category except Work.
+    public static let fallbackPersonalCategories: Set<String> = [
+        "👥 Friends & Family", "📝 Life admin", "💻 Tech & Projects", "🎉 Fun admin"
+    ]
 }
 
 /// Reads tasks from Notion over the raw REST API.

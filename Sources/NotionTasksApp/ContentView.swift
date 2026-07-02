@@ -31,7 +31,7 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 8)
             case .loaded:
-                groupedList
+                taskList
             case .failed(let message):
                 failure(message)
             }
@@ -50,9 +50,30 @@ struct ContentView: View {
         .task { await model.start() }
     }
 
+    /// The preset picker doubles as the panel title: it shows the active preset
+    /// and switches on selection (#5). Switching republishes `model.preset`, so
+    /// the list below reflows immediately with no manual refresh.
     private var header: some View {
-        Text("Pivotal Priorities")
-            .font(.headline)
+        Menu {
+            ForEach(Preset.allCases) { preset in
+                Button {
+                    model.selectPreset(preset)
+                } label: {
+                    if preset == model.preset {
+                        Label(preset.title, systemImage: "checkmark")
+                    } else {
+                        Text(preset.title)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(model.preset.title).font(.headline)
+                Image(systemName: "chevron.down").font(.caption2)
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
     }
 
     private var tokenEntry: some View {
@@ -69,14 +90,17 @@ struct ContentView: View {
         }
     }
 
-    /// The Pivotal Priorities view: rows grouped under P0 / P1 / P2 / no-priority
-    /// headers. The priority lives in the header, so grouped rows drop their own
-    /// priority badge (`showPriority: false`) to avoid repeating it on every row.
-    private var groupedList: some View {
-        let groups = model.pivotalGroups()
+    /// The active preset's list (#4/#5). Grouped presets (Pivotal, Home) render
+    /// P0 / P1 / P2 / no-priority section headers, so their rows drop the own
+    /// priority badge (`showPriority: false`); flat presets (Late or due today,
+    /// All open) are one headerless list that keeps the per-row badge, since
+    /// priority isn't otherwise shown.
+    private var taskList: some View {
+        let groups = model.groups()
+        let grouped = model.preset.isGrouped
         return Group {
             if groups.isEmpty {
-                Text("Nothing on your Pivotal Priorities right now.")
+                Text("Nothing in \(model.preset.title) right now.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
@@ -85,9 +109,11 @@ struct ContentView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(groups, id: \.priority) { group in
-                            sectionHeader(group.priority)
+                            if grouped {
+                                sectionHeader(group.priority)
+                            }
                             ForEach(group.tasks) { task in
-                                row(for: task, showPriority: false)
+                                row(for: task, showPriority: !grouped)
                                     .padding(.vertical, 6)
                                 Divider()
                             }
