@@ -59,9 +59,7 @@ public final class AppModel: ObservableObject {
         do {
             try await makeClient(token).updateStatus(pageID: taskID, to: newStatus)
             state = .loaded(tasks.map { task in
-                task.id == taskID
-                    ? NotionTask(id: task.id, title: task.title, status: newStatus)
-                    : task
+                task.id == taskID ? task.withStatus(newStatus) : task
             })
         } catch {
             writeError = "Couldn't update that task in Notion — it's unchanged. Try again."

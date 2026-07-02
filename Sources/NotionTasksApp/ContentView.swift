@@ -66,19 +66,76 @@ struct ContentView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(tasks) { task in
-                            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                Text(task.title)
-                                    .lineLimit(2)
-                                Spacer(minLength: 8)
-                                statusMenu(for: task)
-                            }
-                            .padding(.vertical, 6)
+                            row(for: task)
+                                .padding(.vertical, 6)
                             Divider()
                         }
                     }
                 }
                 .frame(maxHeight: 360)
             }
+        }
+    }
+
+    private func row(for task: NotionTask) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            completeButton(for: task)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(task.title)
+                    .lineLimit(2)
+                metadata(for: task)
+            }
+            Spacer(minLength: 8)
+            statusMenu(for: task)
+        }
+    }
+
+    /// One-click complete: sets the task to Done, reusing the #3 write path.
+    /// Shows filled when already Done.
+    private func completeButton(for task: NotionTask) -> some View {
+        let isDone = task.status == "Done"
+        return Button {
+            Task { await model.setStatus(taskID: task.id, to: "Done") }
+        } label: {
+            Image(systemName: isDone ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(isDone ? Color.secondary : Color.primary)
+        }
+        .buttonStyle(.plain)
+        .help(isDone ? "Done" : "Mark done")
+        .accessibilityLabel(isDone ? "Done" : "Mark done")
+    }
+
+    /// Line 2: Priority · Due date · Category, with absent fields omitted so
+    /// there are no stray separators. Renders nothing when all three are absent.
+    @ViewBuilder
+    private func metadata(for task: NotionTask) -> some View {
+        // Due and category are plain text; join them so separators only appear
+        // between present segments.
+        let textSegments = [task.relativeDueText(), task.category].compactMap { $0 }
+        if task.priority != nil || !textSegments.isEmpty {
+            HStack(spacing: 5) {
+                if let priority = task.priority {
+                    Circle()
+                        .fill(colour(for: priority))
+                        .frame(width: 7, height: 7)
+                    Text(priority.rawValue)
+                    if !textSegments.isEmpty { Text("·") }
+                }
+                if !textSegments.isEmpty {
+                    Text(textSegments.joined(separator: " · "))
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    /// The only colour in the list: P0 red, P1 amber, P2 green (ADR-0002).
+    private func colour(for priority: Priority) -> Color {
+        switch priority {
+        case .p0: return .red
+        case .p1: return .orange
+        case .p2: return .green
         }
     }
 

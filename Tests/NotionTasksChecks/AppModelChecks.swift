@@ -89,6 +89,27 @@ func appModelChecks(_ t: CheckRun) async {
         t.expect(model.writeError == nil, "no write error expected")
     }
 
+    await t.test("completing a task sets it to Done and preserves its other fields") {
+        let store = InMemoryTokenStore()
+        let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)
+        let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
+        await model.submit(token: "ntn_good")
+
+        // tasks[1]: "Draft the Q3 board update", To Do, P0, due 2026-07-02, Work.
+        let todoID = "11111111-0000-0000-0000-000000000002"
+        await model.setStatus(taskID: todoID, to: "Done")
+
+        guard case .loaded(let tasks) = model.state else {
+            t.expect(false, "expected .loaded, got \(model.state)"); return
+        }
+        let done = try require(tasks.first { $0.id == todoID })
+        t.expect(done.status == "Done", "status was \(done.status ?? "nil")")
+        // The status change must not wipe the row's other fields.
+        t.expect(done.priority == .p0, "priority drifted to \(String(describing: done.priority))")
+        t.expect(done.category == "👨🏻‍💻 Work", "category drifted to \(done.category ?? "nil")")
+        t.expect(done.dueDate != nil, "due date was dropped on status change")
+    }
+
     await t.test("a failed write leaves the row unchanged and surfaces an error") {
         let store = InMemoryTokenStore()
         let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)

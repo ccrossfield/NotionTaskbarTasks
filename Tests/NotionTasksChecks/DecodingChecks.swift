@@ -32,4 +32,47 @@ func decodingChecks(_ t: CheckRun) async {
         t.expectEqual(response.hasMore, false)
         t.expect(response.nextCursor == nil, "expected nil next_cursor")
     }
+
+    await t.test("priority decodes to P0/P1/P2, or nil when unset") {
+        let tasks = try JSONDecoder().decode(
+            NotionQueryResponse.self, from: try fixtureData("query_response")).tasks
+        t.expect(tasks[0].priority == .p1, "tasks[0].priority was \(String(describing: tasks[0].priority))")
+        t.expect(tasks[1].priority == .p0, "tasks[1].priority was \(String(describing: tasks[1].priority))")
+        t.expect(tasks[2].priority == .p2, "tasks[2].priority was \(String(describing: tasks[2].priority))")
+        t.expect(tasks[3].priority == nil, "tasks[3].priority (select null) should be nil")
+        t.expect(tasks[4].priority == nil, "tasks[4].priority (unset) should be nil")
+    }
+
+    await t.test("category decodes to the select name, or nil when unset") {
+        let tasks = try JSONDecoder().decode(
+            NotionQueryResponse.self, from: try fixtureData("query_response")).tasks
+        t.expect(tasks[0].category == "👨🏻‍💻 Work", "tasks[0].category was \(tasks[0].category ?? "nil")")
+        t.expect(tasks[2].category == "📝 Life admin", "tasks[2].category was \(tasks[2].category ?? "nil")")
+        t.expect(tasks[4].category == nil, "tasks[4].category (unset) should be nil")
+    }
+
+    await t.test("due date decodes to the right calendar day, or nil when absent") {
+        let tasks = try JSONDecoder().decode(
+            NotionQueryResponse.self, from: try fixtureData("query_response")).tasks
+        // tasks[1] is due 2026-07-02 in the fixture.
+        let due = try require(tasks[1].dueDate)
+        let parts = Calendar.current.dateComponents([.year, .month, .day], from: due)
+        t.expectEqual(parts.year, 2026)
+        t.expectEqual(parts.month, 7)
+        t.expectEqual(parts.day, 2)
+        t.expect(tasks[2].dueDate == nil, "tasks[2] has date:null, dueDate should be nil")
+        t.expect(tasks[4].dueDate == nil, "tasks[4] has no due date, dueDate should be nil")
+    }
+
+    await t.test("start-from decodes when present and is nil when the property is absent") {
+        let tasks = try JSONDecoder().decode(
+            NotionQueryResponse.self, from: try fixtureData("query_response")).tasks
+        // tasks[0] carries "Start from": 2026-06-15; tasks[2] has no such property.
+        let start = try require(tasks[0].startFrom)
+        let parts = Calendar.current.dateComponents([.year, .month, .day], from: start)
+        t.expectEqual(parts.year, 2026)
+        t.expectEqual(parts.month, 6)
+        t.expectEqual(parts.day, 15)
+        t.expect(tasks[2].startFrom == nil, "tasks[2] has no Start from, should be nil")
+    }
 }
