@@ -22,6 +22,12 @@ struct ContentView: View {
                 failure(message)
             }
 
+            if let writeError = model.writeError {
+                Text(writeError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
             Divider()
             footer
         }
@@ -64,9 +70,7 @@ struct ContentView: View {
                                 Text(task.title)
                                     .lineLimit(2)
                                 Spacer(minLength: 8)
-                                Text(task.status ?? "—")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                statusMenu(for: task)
                             }
                             .padding(.vertical, 6)
                             Divider()
@@ -76,6 +80,22 @@ struct ContentView: View {
                 .frame(maxHeight: 360)
             }
         }
+    }
+
+    private func statusMenu(for task: NotionTask) -> some View {
+        Menu {
+            ForEach(NotionConfig.selectableStatuses, id: \.self) { state in
+                Button(state) {
+                    Task { await model.setStatus(taskID: task.id, to: state) }
+                }
+            }
+        } label: {
+            Text(task.status ?? "Set status")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
     }
 
     private func failure(_ message: String) -> some View {

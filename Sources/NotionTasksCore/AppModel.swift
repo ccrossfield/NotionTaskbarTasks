@@ -15,6 +15,9 @@ public enum TaskListState: Equatable {
 @MainActor
 public final class AppModel: ObservableObject {
     @Published public private(set) var state: TaskListState = .needsToken
+    /// Set when a status write fails, so the UI can tell the user the change
+    /// didn't take. Cleared when a write is attempted or succeeds.
+    @Published public private(set) var writeError: String?
 
     private let tokenStore: TokenStore
     private let makeClient: (String) -> NotionClient
@@ -46,8 +49,28 @@ public final class AppModel: ObservableObject {
         await load(token: trimmed)
     }
 
+    /// Change a task's status and persist it to Notion. Pessimistic: the row
+    /// updates only after the write succeeds, so a failed write causes no
+    /// optimistic drift.
+    public func setStatus(taskID: String, to newStatus: String) async {
+        guard case .loaded(let tasks) = state else { return }
+        guard let token = tokenStore.read(), !token.isEmpty else { return }
+        writeError = nil
+        do {
+            try await makeClient(token).updateStatus(pageID: taskID, to: newStatus)
+            state = .loaded(tasks.map { task in
+                task.id == taskID
+                    ? NotionTask(id: task.id, title: task.title, status: newStatus)
+                    : task
+            })
+        } catch {
+            writeError = "Couldn't update that task in Notion — it's unchanged. Try again."
+        }
+    }
+
     /// Re-fetch with the token already stored.
     public func refresh() async {
+        writeError = nil
         await start()
     }
 

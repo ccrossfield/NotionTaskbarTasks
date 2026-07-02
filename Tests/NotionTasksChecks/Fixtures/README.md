@@ -23,5 +23,13 @@ NOTION_TOKEN=ntn_xxx python3 spike/notion_api_spike.py \
 
 The decode tests assert on specific titles/statuses, so after capturing, update
 those expected values to match the real data (or point the tests at a trimmed
-copy). Until then, treat a green decode test as "the decoder handles the shape",
-not "the decoder handles Notion's exact bytes".
+copy).
+
+## Live decode confirmed 2026-07-02
+
+The running app decoded the *real* live database through the same
+`NotionQueryResponse` decoder and rendered real tasks with correct titles and
+status. So "the decoder handles Notion's exact bytes" is already verified
+end-to-end — this synthetic fixture now serves as a shape-accurate regression
+guard, kept synthetic deliberately so real task titles stay out of version
+control.

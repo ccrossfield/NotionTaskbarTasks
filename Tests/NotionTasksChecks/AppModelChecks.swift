@@ -69,4 +69,40 @@ func appModelChecks(_ t: CheckRun) async {
             t.expect(false, "expected .failed, got \(model.state)")
         }
     }
+
+    let firstTaskID = "11111111-0000-0000-0000-000000000001" // "Wire up…", status "In Progress"
+
+    await t.test("setStatus reflects the new status on the row after a successful write") {
+        let store = InMemoryTokenStore()
+        let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)
+        let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
+        await model.submit(token: "ntn_good")
+
+        await model.setStatus(taskID: firstTaskID, to: "Done")
+
+        guard case .loaded(let tasks) = model.state else {
+            t.expect(false, "expected .loaded, got \(model.state)"); return
+        }
+        let changed = try require(tasks.first { $0.id == firstTaskID })
+        t.expect(changed.status == "Done", "row status was \(changed.status ?? "nil")")
+        t.expect(stub.lastRequest?.httpMethod == "PATCH", "a PATCH should have been sent")
+        t.expect(model.writeError == nil, "no write error expected")
+    }
+
+    await t.test("a failed write leaves the row unchanged and surfaces an error") {
+        let store = InMemoryTokenStore()
+        let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)
+        let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
+        await model.submit(token: "ntn_good")
+        stub.statusCode = 500 // the write will fail
+
+        await model.setStatus(taskID: firstTaskID, to: "Done")
+
+        guard case .loaded(let tasks) = model.state else {
+            t.expect(false, "expected .loaded, got \(model.state)"); return
+        }
+        let unchanged = try require(tasks.first { $0.id == firstTaskID })
+        t.expect(unchanged.status == "In Progress", "status drifted to \(unchanged.status ?? "nil")")
+        t.expect(model.writeError != nil, "a failed write should surface an error")
+    }
 }

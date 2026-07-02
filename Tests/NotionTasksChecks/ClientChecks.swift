@@ -4,8 +4,8 @@ import NotionTasksCore
 /// Records the request it was handed and replays a canned response — the HTTP
 /// transport seam. No network.
 final class StubHTTPClient: HTTPClient {
-    let responseData: Data
-    let statusCode: Int
+    var responseData: Data
+    var statusCode: Int
     private(set) var lastRequest: URLRequest?
 
     init(responseData: Data, statusCode: Int) {
@@ -63,6 +63,42 @@ func clientChecks(_ t: CheckRun) async {
         do {
             _ = try await client.fetchTasks()
             t.expect(false, "expected fetchTasks to throw")
+        } catch NotionClientError.httpError(let code) {
+            t.expectEqual(code, 500)
+        } catch {
+            t.expect(false, "wrong error: \(error)")
+        }
+    }
+
+    await t.test("updateStatus PATCHes the page with the status-property shape") {
+        let stub = StubHTTPClient(responseData: Data(), statusCode: 200)
+        let client = NotionClient(dataSourceID: dataSource, token: "ntn_test", http: stub)
+
+        try await client.updateStatus(pageID: "page-123", to: "Done")
+
+        let request = try require(stub.lastRequest)
+        t.expect(request.httpMethod == "PATCH", "method was \(request.httpMethod ?? "nil")")
+        t.expect(request.url?.absoluteString == "https://api.notion.com/v1/pages/page-123",
+                 "url was \(request.url?.absoluteString ?? "nil")")
+        t.expect(request.value(forHTTPHeaderField: "Notion-Version") == "2025-09-03", "version header")
+        t.expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer ntn_test", "auth header")
+
+        // Exactly {"properties":{"Status":{"status":{"name":"Done"}}}} — no extra keys.
+        let body = try require(request.httpBody)
+        let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        t.expect((json?.keys.sorted() ?? []) == ["properties"],
+                 "top-level keys were \(json?.keys.sorted() ?? [])")
+        let statusName = ((((json?["properties"] as? [String: Any])?["Status"] as? [String: Any])?["status"]
+            as? [String: Any])?["name"]) as? String
+        t.expect(statusName == "Done", "status.name was \(statusName ?? "nil")")
+    }
+
+    await t.test("a failed status write throws") {
+        let stub = StubHTTPClient(responseData: Data(), statusCode: 500)
+        let client = NotionClient(dataSourceID: dataSource, token: "t", http: stub)
+        do {
+            try await client.updateStatus(pageID: "p", to: "Done")
+            t.expect(false, "expected updateStatus to throw")
         } catch NotionClientError.httpError(let code) {
             t.expectEqual(code, 500)
         } catch {
