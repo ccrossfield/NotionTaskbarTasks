@@ -4,6 +4,8 @@ public enum NotionClientError: Error, Equatable {
     case unauthorized
     case httpError(Int)
     case invalidResponse
+    /// Notion kept returning 429 after we exhausted our backoff retries.
+    case rateLimited
 }
 
 /// The one place the multi-source assumption lives (ADR docs/adr/0001).
@@ -29,15 +31,23 @@ public struct NotionClient {
     private let token: String
     private let http: HTTPClient
     private let notionVersion: String
+    private let sleep: @Sendable (TimeInterval) async -> Void
+
+    /// How many times we retry a 429 before giving up with `.rateLimited`.
+    private static let maxRetries = 3
 
     public init(dataSourceID: String = NotionConfig.dataSourceID,
                 token: String,
                 http: HTTPClient,
-                notionVersion: String = NotionConfig.notionVersion) {
+                notionVersion: String = NotionConfig.notionVersion,
+                sleep: @escaping @Sendable (TimeInterval) async -> Void = { seconds in
+                    try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                }) {
         self.dataSourceID = dataSourceID
         self.token = token
         self.http = http
         self.notionVersion = notionVersion
+        self.sleep = sleep
     }
 
     public func fetchTasks() async throws -> [NotionTask] {
@@ -69,14 +79,31 @@ public struct NotionClient {
 
     @discardableResult
     private func send(_ request: URLRequest) async throws -> Data {
-        let (data, response) = try await http.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw NotionClientError.invalidResponse
-        }
-        switch httpResponse.statusCode {
-        case 200: return data
-        case 401: throw NotionClientError.unauthorized
-        default: throw NotionClientError.httpError(httpResponse.statusCode)
+        // On a 429 we honour the Retry-After header (integer seconds), sleep,
+        // and retry - up to `maxRetries` times. If Notion is still throttling
+        // us after that, we surface `.rateLimited` rather than hammering on.
+        var attempt = 0
+        while true {
+            let (data, response) = try await http.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw NotionClientError.invalidResponse
+            }
+            switch httpResponse.statusCode {
+            case 200:
+                return data
+            case 401:
+                throw NotionClientError.unauthorized
+            case 429:
+                guard attempt < Self.maxRetries else {
+                    throw NotionClientError.rateLimited
+                }
+                attempt += 1
+                let retryAfter = TimeInterval(
+                    httpResponse.value(forHTTPHeaderField: "Retry-After").flatMap(Int.init) ?? 0)
+                await sleep(retryAfter)
+            default:
+                throw NotionClientError.httpError(httpResponse.statusCode)
+            }
         }
     }
 }
