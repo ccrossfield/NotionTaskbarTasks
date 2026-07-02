@@ -32,6 +32,26 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
+# Code-sign with a stable identity if one exists, so the Keychain "Always Allow"
+# survives rebuilds. Falls back to ad-hoc (which does NOT survive rebuilds — you
+# get re-prompted for the token after each build). Override with CODESIGN_IDENTITY.
+IDENTITY="${CODESIGN_IDENTITY:-}"
+if [ -z "$IDENTITY" ]; then
+  # Not `-v`: a self-signed identity is valid for signing but reported untrusted,
+  # so it only appears without the "valid only" filter.
+  IDENTITY="$(security find-identity -p codesigning 2>/dev/null | awk '/[0-9]+\) [0-9A-F]{40}/{print $2; exit}')"
+fi
+if [ -n "$IDENTITY" ]; then
+  codesign --force --deep --sign "$IDENTITY" "$APP"
+  echo "Signed with code-signing identity $IDENTITY (Always Allow will persist across rebuilds)"
+else
+  codesign --force --deep --sign - "$APP"
+  echo "Ad-hoc signed — no code-signing identity found."
+  echo "  You'll be re-prompted for the token after each rebuild. To fix permanently,"
+  echo "  create a self-signed 'Code Signing' certificate named e.g. 'NotionTasks Dev'"
+  echo "  in Keychain Access (Certificate Assistant), then re-run this script."
+fi
+
 echo "Built $APP"
 echo "Run it with:  open $APP"
 echo "(a checklist icon should appear in the menu bar; there is no Dock icon)"
