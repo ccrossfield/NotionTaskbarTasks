@@ -1,0 +1,11 @@
+# Claude Code machine-local settings (per-user permissions and overrides)
+.claude/settings.local.json
+
+# Installed skills — third-party deps from mattpocock/skills.
+# Source of truth is skills-lock.json (committed); these dirs are generated
+# output. Restore on a fresh clone with: npx skills experimental_install
+.agents/skills/
+.claude/skills/
+
+# macOS
+.DS_Store
