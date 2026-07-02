@@ -1,0 +1,51 @@
+{
+  "object": "data_source",
+  "id": "e19b11fa-a660-4de2-8482-b840210db08f",
+  "properties": {
+    "Task": { "id": "title", "name": "Task", "type": "title", "title": {} },
+    "Status": {
+      "id": "aBcD",
+      "name": "Status",
+      "type": "status",
+      "status": {
+        "options": [
+          { "id": "opt-todo", "name": "To Do", "color": "default" },
+          { "id": "opt-blocked", "name": "Blocked", "color": "orange" },
+          { "id": "opt-inprog", "name": "In Progress", "color": "blue" },
+          { "id": "opt-done", "name": "Done", "color": "green" }
+        ],
+        "groups": [
+          { "id": "grp-todo", "name": "To-do", "color": "gray", "option_ids": ["opt-todo", "opt-blocked"] },
+          { "id": "grp-inprog", "name": "In progress", "color": "blue", "option_ids": ["opt-inprog"] },
+          { "id": "grp-complete", "name": "Complete", "color": "green", "option_ids": ["opt-done"] }
+        ]
+      }
+    },
+    "Priority": {
+      "id": "prio",
+      "name": "Priority",
+      "type": "select",
+      "select": {
+        "options": [
+          { "id": "p-0", "name": "P0", "color": "red" },
+          { "id": "p-1", "name": "P1", "color": "yellow" },
+          { "id": "p-2", "name": "P2", "color": "green" }
+        ]
+      }
+    },
+    "Category": {
+      "id": "cat0",
+      "name": "Category",
+      "type": "select",
+      "select": {
+        "options": [
+          { "id": "c-work", "name": "👨🏻‍💻 Work", "color": "default" },
+          { "id": "c-friends", "name": "👥 Friends & Family", "color": "pink" },
+          { "id": "c-admin", "name": "📝 Life admin", "color": "brown" },
+          { "id": "c-tech", "name": "💻 Tech & Projects", "color": "purple" },
+          { "id": "c-fun", "name": "🎉 Fun admin", "color": "yellow" }
+        ]
+      }
+    }
+  }
+}
