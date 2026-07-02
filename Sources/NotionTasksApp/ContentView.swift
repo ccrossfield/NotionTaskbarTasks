@@ -1,9 +1,23 @@
 import SwiftUI
 import NotionTasksCore
 
+/// Carries the task list's natural content height up to the view so the panel
+/// can size to it. A `ScrollView` reports a tiny ideal height, so without this
+/// the `MenuBarExtra` window collapses to less than one row.
+private struct ListHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel
     @State private var tokenField = ""
+    @State private var listHeight: CGFloat = 0
+
+    /// Cap the list before it scrolls, so the panel never fills the screen.
+    private let maxListHeight: CGFloat = 360
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -71,8 +85,12 @@ struct ContentView: View {
                             Divider()
                         }
                     }
+                    .background(GeometryReader { geo in
+                        Color.clear.preference(key: ListHeightKey.self, value: geo.size.height)
+                    })
                 }
-                .frame(maxHeight: 360)
+                .frame(height: min(listHeight, maxListHeight))
+                .onPreferenceChange(ListHeightKey.self) { listHeight = $0 }
             }
         }
     }
