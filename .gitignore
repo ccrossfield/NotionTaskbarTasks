@@ -7,5 +7,9 @@
 .agents/skills/
 .claude/skills/
 
+# Swift Package Manager build output + assembled app bundle
+.build/
+NotionTasks.app/
+
 # macOS
 .DS_Store
