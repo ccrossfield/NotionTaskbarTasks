@@ -20,6 +20,12 @@ public enum NotionConfig {
     /// real options in the Tasks DB. ADR-0001 requires schema-derivation for
     /// the open-status *filter*; this write menu can stay a known set.
     public static let selectableStatuses = ["Blocked", "To Do", "In Progress", "Done"]
+
+    /// Used only if the schema fetch fails. The happy path derives the open set
+    /// and the Work category from the live schema (ADR-0001); these keep the app
+    /// showing something sensible if that one request doesn't come back.
+    public static let fallbackOpenStatuses: Set<String> = ["To Do", "In Progress", "Blocked"]
+    public static let fallbackWorkCategory = "👨🏻‍💻 Work"
 }
 
 /// Reads tasks from Notion over the raw REST API.
@@ -58,6 +64,14 @@ public struct NotionClient {
         return try JSONDecoder().decode(NotionQueryResponse.self, from: data).tasks
     }
 
+    /// Reads the data source schema (`GET /v1/data_sources/{id}`). Used to derive
+    /// the "open" status set at runtime rather than hardcoding it (ADR-0001).
+    public func fetchSchema() async throws -> DataSourceSchema {
+        let request = makeRequest(path: "data_sources/\(dataSourceID)", method: "GET")
+        let data = try await send(request)
+        return try JSONDecoder().decode(DataSourceSchema.self, from: data)
+    }
+
     /// Writes a new status to a task's page. Body shape confirmed by the spike
     /// and ADR-0001: `{"properties":{"Status":{"status":{"name":<state>}}}}`.
     public func updateStatus(pageID: String, to state: String) async throws {
@@ -67,13 +81,15 @@ public struct NotionClient {
         _ = try await send(request)
     }
 
-    private func makeRequest(path: String, method: String, jsonBody: Any) -> URLRequest {
+    private func makeRequest(path: String, method: String, jsonBody: Any? = nil) -> URLRequest {
         var request = URLRequest(url: URL(string: "https://api.notion.com/v1/\(path)")!)
         request.httpMethod = method
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue(notionVersion, forHTTPHeaderField: "Notion-Version")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: jsonBody)
+        if let jsonBody {
+            request.httpBody = try? JSONSerialization.data(withJSONObject: jsonBody)
+        }
         return request
     }
 

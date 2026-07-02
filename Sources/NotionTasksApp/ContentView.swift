@@ -30,8 +30,8 @@ struct ContentView: View {
                 ProgressView("Loading tasks…")
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 8)
-            case .loaded(let tasks):
-                taskList(tasks)
+            case .loaded:
+                groupedList
             case .failed(let message):
                 failure(message)
             }
@@ -51,7 +51,7 @@ struct ContentView: View {
     }
 
     private var header: some View {
-        Text("Tasks")
+        Text("Pivotal Priorities")
             .font(.headline)
     }
 
@@ -69,20 +69,28 @@ struct ContentView: View {
         }
     }
 
-    private func taskList(_ tasks: [NotionTask]) -> some View {
-        Group {
-            if tasks.isEmpty {
-                Text("No tasks.")
+    /// The Pivotal Priorities view: rows grouped under P0 / P1 / P2 / no-priority
+    /// headers. The priority lives in the header, so grouped rows drop their own
+    /// priority badge (`showPriority: false`) to avoid repeating it on every row.
+    private var groupedList: some View {
+        let groups = model.pivotalGroups()
+        return Group {
+            if groups.isEmpty {
+                Text("Nothing on your Pivotal Priorities right now.")
+                    .font(.callout)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 8)
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        ForEach(tasks) { task in
-                            row(for: task)
-                                .padding(.vertical, 6)
-                            Divider()
+                        ForEach(groups, id: \.priority) { group in
+                            sectionHeader(group.priority)
+                            ForEach(group.tasks) { task in
+                                row(for: task, showPriority: false)
+                                    .padding(.vertical, 6)
+                                Divider()
+                            }
                         }
                     }
                     .background(GeometryReader { geo in
@@ -95,13 +103,30 @@ struct ContentView: View {
         }
     }
 
-    private func row(for task: NotionTask) -> some View {
+    private func sectionHeader(_ priority: Priority?) -> some View {
+        HStack(spacing: 5) {
+            if let priority {
+                Circle()
+                    .fill(colour(for: priority))
+                    .frame(width: 7, height: 7)
+                Text(priority.rawValue)
+            } else {
+                Text("No priority")
+            }
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(priority == nil ? Color.secondary : Color.primary)
+        .padding(.top, 8)
+        .padding(.bottom, 2)
+    }
+
+    private func row(for task: NotionTask, showPriority: Bool = true) -> some View {
         HStack(alignment: .top, spacing: 8) {
             completeButton(for: task)
             VStack(alignment: .leading, spacing: 2) {
                 Text(task.title)
                     .lineLimit(2)
-                metadata(for: task)
+                metadata(for: task, showPriority: showPriority)
             }
             Spacer(minLength: 8)
             statusMenu(for: task)
@@ -124,15 +149,17 @@ struct ContentView: View {
     }
 
     /// Line 2: Priority · Due date · Category, with absent fields omitted so
-    /// there are no stray separators. Renders nothing when all three are absent.
+    /// there are no stray separators. Renders nothing when all are absent.
+    /// `showPriority` is false in grouped views, where the header carries it.
     @ViewBuilder
-    private func metadata(for task: NotionTask) -> some View {
+    private func metadata(for task: NotionTask, showPriority: Bool) -> some View {
         // Due and category are plain text; join them so separators only appear
         // between present segments.
         let textSegments = [task.relativeDueText(), task.category].compactMap { $0 }
-        if task.priority != nil || !textSegments.isEmpty {
+        let withPriority = showPriority && task.priority != nil
+        if withPriority || !textSegments.isEmpty {
             HStack(spacing: 5) {
-                if let priority = task.priority {
+                if withPriority, let priority = task.priority {
                     Circle()
                         .fill(colour(for: priority))
                         .frame(width: 7, height: 7)

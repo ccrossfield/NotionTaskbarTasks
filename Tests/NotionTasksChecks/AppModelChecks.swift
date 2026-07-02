@@ -10,6 +10,21 @@ final class InMemoryTokenStore: TokenStore {
     func delete() throws { token = nil }
 }
 
+/// Routes the schema GET vs the query POST to different canned bodies, so a full
+/// `AppModel.load` (which fetches both) can be exercised through the seam.
+final class RoutingStubHTTPClient: HTTPClient {
+    let schema: Data
+    let query: Data
+    init(schema: Data, query: Data) { self.schema = schema; self.query = query }
+
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        let isQuery = request.url?.absoluteString.hasSuffix("/query") ?? false
+        let response = HTTPURLResponse(
+            url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+        return (isQuery ? query : schema, response)
+    }
+}
+
 @MainActor
 func appModelChecks(_ t: CheckRun) async {
     t.suite("AppModel wiring")
@@ -108,6 +123,30 @@ func appModelChecks(_ t: CheckRun) async {
         t.expect(done.priority == .p0, "priority drifted to \(String(describing: done.priority))")
         t.expect(done.category == "👨🏻‍💻 Work", "category drifted to \(done.category ?? "nil")")
         t.expect(done.dueDate != nil, "due date was dropped on status change")
+    }
+
+    await t.test("after loading, Pivotal Priorities groups open Work tasks by schema-derived open set") {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "Europe/London")!
+        let today = cal.date(from: DateComponents(year: 2026, month: 7, day: 15, hour: 12))!
+
+        let store = InMemoryTokenStore()
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
+
+        await model.submit(token: "ntn_good")
+        let groups = model.pivotalGroups(today: today, calendar: cal)
+
+        // Of the 5 fixture tasks, only the two open Work tasks qualify (both are
+        // surfaced by this date). "Draft the Q3 board update" is P0, "Wire up the
+        // menu bar read path" is P1. The Blocked/Done/untitled ones are excluded
+        // by category or by the schema-derived open set (Done is not open).
+        t.expectEqual(groups.map(\.priority), [.p0, .p1])
+        t.expectEqual(groups.first?.tasks.map(\.title), ["Draft the Q3 board update"])
+        t.expect(groups.count == 2 && groups[1].tasks.map(\.title) == ["Wire up the menu bar read path"],
+                 "P1 group should hold the one open Work P1 task")
     }
 
     await t.test("a failed write leaves the row unchanged and surfaces an error") {

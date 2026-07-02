@@ -22,6 +22,12 @@ public final class AppModel: ObservableObject {
     private let tokenStore: TokenStore
     private let makeClient: (String) -> NotionClient
 
+    /// Schema-derived facts for the Pivotal Priorities filter (ADR-0001). Set
+    /// from the live schema on load; the fallbacks apply only if that fetch
+    /// fails, so the list never silently empties.
+    private var openStatuses: Set<String> = NotionConfig.fallbackOpenStatuses
+    private var workCategory: String = NotionConfig.fallbackWorkCategory
+
     /// - Parameter makeClient: builds a client for a token. Injected so tests
     ///   can supply a stubbed transport; the app supplies `URLSession`.
     public init(tokenStore: TokenStore, makeClient: @escaping (String) -> NotionClient) {
@@ -78,10 +84,29 @@ public final class AppModel: ObservableObject {
         state = .needsToken
     }
 
+    /// The launch view (issue #4): open, Work-category, not-deferred tasks
+    /// grouped P0/P1/P2/no-priority. Recomputed from the raw `.loaded` tasks, so
+    /// a status change (which mutates that array) reflows the groups for free.
+    /// `today` is injectable for tests; the app passes the real date.
+    public func pivotalGroups(today: Date = Date(), calendar: Calendar = .current) -> [TaskGroup] {
+        guard case .loaded(let tasks) = state else { return [] }
+        return TaskListEngine.pivotalPriorities(
+            tasks, openStatuses: openStatuses, workCategory: workCategory,
+            today: today, calendar: calendar)
+    }
+
     private func load(token: String) async {
         state = .loading
+        let client = makeClient(token)
         do {
-            let tasks = try await makeClient(token).fetchTasks()
+            // Schema first, so the open set is derived from the live schema
+            // (ADR-0001). Best-effort: a schema hiccup falls back to the
+            // defaults rather than failing the whole load.
+            if let schema = try? await client.fetchSchema() {
+                openStatuses = schema.openStatusNames
+                if let work = schema.workCategoryName { workCategory = work }
+            }
+            let tasks = try await client.fetchTasks()
             state = .loaded(tasks)
         } catch NotionClientError.unauthorized {
             // The token is bad; drop it so the next launch re-prompts.
