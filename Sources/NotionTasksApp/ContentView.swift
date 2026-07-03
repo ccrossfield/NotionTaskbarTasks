@@ -216,10 +216,14 @@ struct ContentView: View {
     /// date) would collide with the buttons.
     private var composerFooter: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 10) {
-                quickFields
-                Spacer(minLength: 10)
-                composerActions
+            // Spacing is priced per-gap, not uniformly: a flat HStack(spacing:10)
+            // charges 50pt of mandatory air and pushes the default state to
+            // 322pt — 6pt over the 316pt the panel offers (measured via
+            // NSHostingView.fittingSize). This shape prices it at 306pt.
+            HStack(spacing: 0) {
+                HStack(spacing: 10) { quickFields }
+                Spacer(minLength: 16)
+                HStack(spacing: 8) { composerActions }
             }
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 10) {
