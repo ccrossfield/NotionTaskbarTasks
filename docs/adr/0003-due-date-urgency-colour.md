@@ -24,8 +24,10 @@ rows.
    agreement, not conflict.
 2. **Discrete buckets over a week horizon, not a continuous gradient**:
    overdue (red, semibold), today (orange), soon = +1 to +7 days (amber),
-   later / undated (secondary grey, unchanged). The amber is a custom adaptive
-   colour — system yellow is illegible at caption size on a light background.
+   later / undated (secondary grey, unchanged). The orange and amber are both
+   custom adaptive colours: system yellow is illegible at caption size on a
+   light background, and live testing showed system orange is too. Only the
+   red is a standard system colour.
 3. **Wording gains a relative middle ground**: "Tomorrow" at +1, weekday name
    ("Wed") at +2 to +6, short date from +7. Weekday names stop at +6 because a
    task exactly +7 out shares today's weekday name and would read as due

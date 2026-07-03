@@ -691,7 +691,7 @@ struct ContentView: View {
         case .overdue:
             Text(text).fontWeight(.semibold).foregroundStyle(.red)
         case .today:
-            Text(text).foregroundStyle(.orange)
+            Text(text).foregroundStyle(Self.todayOrange)
         case .soon:
             Text(text).foregroundStyle(Self.soonAmber)
         case .later, .none:
@@ -699,9 +699,17 @@ struct ContentView: View {
         }
     }
 
-    /// A custom adaptive amber for the "soon" bucket: system yellow is
-    /// illegible at caption size on a light background, so light mode gets a
-    /// darker ochre and dark mode a brighter gold.
+    /// Custom adaptive colours for the "today" and "soon" buckets: the system
+    /// orange and yellow are both too bright to read at caption size on a
+    /// light background (yellow by inspection, orange by live test), so light
+    /// mode gets darker burnt-orange/ochre and dark mode brighter tones. The
+    /// two stay a hue apart so today reads hotter than the rest of the week.
+    private static let todayOrange = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(red: 1.00, green: 0.62, blue: 0.24, alpha: 1)
+            : NSColor(red: 0.80, green: 0.35, blue: 0.02, alpha: 1)
+    })
+
     private static let soonAmber = Color(nsColor: NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             ? NSColor(red: 1.00, green: 0.75, blue: 0.28, alpha: 1)
