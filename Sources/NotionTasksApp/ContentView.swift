@@ -194,49 +194,85 @@ struct ContentView: View {
                     // hierarchy before it can take key focus.
                     DispatchQueue.main.async { draftTitleFocused = true }
                 }
-            HStack(spacing: 10) {
-                quickFieldMenu("Priority", options: model.schemaOptions.priorities,
-                               selection: $draft.priority)
-                quickFieldMenu("Category", options: model.schemaOptions.categories,
-                               selection: $draft.category)
-                dueMenu
-                Spacer()
-            }
-            .font(.caption)
-            .menuStyle(.borderlessButton)
-            .fixedSize()
             if showDueDateField {
                 DatePicker("Due", selection: dueDateBinding, displayedComponents: .date)
                     .datePickerStyle(.stepperField)
                     .font(.caption)
             }
-            HStack {
-                if let createError = model.createError {
-                    Text(createError)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-                Spacer()
-                Button("Cancel") { model.closeComposer() }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
+            composerFooter
+            if let createError = model.createError {
+                Text(createError)
                     .font(.caption)
-                Button {
-                    submitDraft()
-                } label: {
-                    if model.isCreating {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Text("Add")
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .disabled(draft.trimmedTitle.isEmpty || model.isCreating)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Divider()
         }
+    }
+
+    /// The composer footer (#23): quick fields and actions share one line when
+    /// the panel is wide enough for the full chip labels, and fall back to the
+    /// two-line layout when a long label (e.g. 👥 Friends & Family plus a due
+    /// date) would collide with the buttons.
+    private var composerFooter: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                quickFields
+                Spacer(minLength: 10)
+                composerActions
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 10) {
+                    quickFields
+                    Spacer()
+                }
+                HStack {
+                    Spacer()
+                    composerActions
+                }
+            }
+        }
+    }
+
+    /// The chips report their ideal width (`fixedSize`) so ViewThatFits
+    /// measures the full labels — compressible chips would make the one-line
+    /// candidate fit unconditionally and truncate.
+    @ViewBuilder private var quickFields: some View {
+        Group {
+            quickFieldMenu("Priority", options: model.schemaOptions.priorities,
+                           selection: $draft.priority)
+            quickFieldMenu("Category", options: model.schemaOptions.categories,
+                           selection: $draft.category)
+            dueMenu
+        }
+        .font(.caption)
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+    }
+
+    @ViewBuilder private var composerActions: some View {
+        Button("Cancel") { model.closeComposer() }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .font(.caption)
+        Button {
+            submitDraft()
+        } label: {
+            Group {
+                if model.isCreating {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Text("Add")
+                }
+            }
+            // The spinner is narrower than "Add"; a shared floor keeps the
+            // footer's measured width stable mid-create.
+            .frame(minWidth: 28)
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.small)
+        .disabled(draft.trimmedTitle.isEmpty || model.isCreating)
     }
 
     /// A single-select quick-field menu (#22): the schema's options plus None.
