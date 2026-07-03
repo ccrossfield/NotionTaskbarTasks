@@ -22,8 +22,15 @@ struct MainAppLoginItem: LoginItemService {
 /// a non-activating panel silently refuses key status by default and the token
 /// `SecureField` needs keyboard input. Esc closes it like a menu.
 private final class TaskPanel: NSPanel {
+    /// Gives the shell first refusal on a cancel: returns true when it was
+    /// consumed (an open composer closes instead of the panel, #22), false to
+    /// close like a menu.
+    var onCancel: (() -> Bool)?
     override var canBecomeKey: Bool { true }
-    override func cancelOperation(_ sender: Any?) { close() }
+    override func cancelOperation(_ sender: Any?) {
+        if onCancel?() == true { return }
+        close()
+    }
 }
 
 /// Reports SwiftUI content-size changes upward so the window can follow:
@@ -115,15 +122,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             .sink { [weak self] _ in self?.updateBadge() }
             .store(in: &cancellables)
 
-        // Esc dismisses the panel like a menu. cancelOperation covers the
-        // text-field path; this catches Esc with no responder interested.
+        // Esc dismisses the panel like a menu — except an open composer
+        // absorbs the first Esc, closing the draft instead (#22). This
+        // monitor sees the key before the responder chain; cancelOperation
+        // (via `onCancel`) covers the routes that bypass it, e.g. ⌘-period.
         escMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if event.keyCode == 53, let panel = self?.panel, panel.isVisible {
-                panel.close()
-                return nil
+            guard event.keyCode == 53, let self, let panel = self.panel, panel.isVisible else {
+                return event
             }
-            return event
+            if !self.handleCancel() {
+                panel.close()
+            }
+            return nil
         }
+    }
+
+    /// One cancel policy for both Esc routes: an open composer consumes the
+    /// cancel; otherwise the panel closes (#22).
+    private func handleCancel() -> Bool {
+        guard model.isComposing else { return false }
+        model.closeComposer()
+        return true
     }
 
     /// The count beside the icon (#10): open tasks late or due today.
@@ -223,6 +242,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.isReleasedWhenClosed = false
         panel.animationBehavior = .none
         panel.delegate = self
+        panel.onCancel = { [weak self] in self?.handleCancel() ?? false }
 
         self.panel = panel
         self.hostingView = hosting

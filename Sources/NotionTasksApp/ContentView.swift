@@ -4,6 +4,12 @@ import NotionTasksCore
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel
     @State private var tokenField = ""
+    /// The quick-add draft (#22). View state: it exists only while composing,
+    /// and is re-derived from `composerDraft()` every time the composer opens.
+    @State private var draft = TaskDraft()
+    /// Whether the compact due-date field is showing ("Pick a date…").
+    @State private var showDueDateField = false
+    @FocusState private var draftTitleFocused: Bool
 
     /// Fixed height for the loaded content region (controls + list). The
     /// MenuBarExtra window doesn't reliably resize to changing content, so a
@@ -16,6 +22,7 @@ struct ContentView: View {
                 header
                 Spacer()
                 staleBadge
+                addButton
                 refreshButton
                 settingsMenu
             }
@@ -29,6 +36,12 @@ struct ContentView: View {
                     .padding(.vertical, 8)
             case .loaded:
                 VStack(alignment: .leading, spacing: 8) {
+                    if model.isComposing {
+                        composer
+                    }
+                    if let notice = model.createNotice {
+                        createNoticeText(notice)
+                    }
                     if model.isCustom {
                         customControls
                     }
@@ -139,6 +152,172 @@ struct ContentView: View {
             .help("Refresh")
             .accessibilityLabel("Refresh")
         }
+    }
+
+    /// Quick-add (#22): a + in the header, left of refresh, shown only with a
+    /// list loaded — there is nothing to add a task *to* on the other screens.
+    /// It toggles the composer; opening re-derives the view-aware defaults, so
+    /// a stale draft from the last composition never leaks in.
+    @ViewBuilder
+    private var addButton: some View {
+        if case .loaded = model.state {
+            Button {
+                if model.isComposing {
+                    model.closeComposer()
+                } else {
+                    draft = model.composerDraft()
+                    showDueDateField = false
+                    model.openComposer()
+                }
+            } label: {
+                Image(systemName: "plus")
+            }
+            .buttonStyle(.plain)
+            .help("New task")
+            .accessibilityLabel("New task")
+        }
+    }
+
+    /// The quick-add composer (#22): title plus the three quick fields, inline
+    /// at the top of the list. Enter or Add creates (pessimistic — the row
+    /// appears on success); Esc or Cancel discards. It sits inside the
+    /// fixed-height loaded region, so opening it never resizes the panel — the
+    /// list just loses a few rows of viewport while it's open.
+    private var composer: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            TextField("New task", text: $draft.title)
+                .textFieldStyle(.roundedBorder)
+                .focused($draftTitleFocused)
+                .onSubmit(submitDraft)
+                .onAppear {
+                    // Deferred a tick: the field must be in the panel's view
+                    // hierarchy before it can take key focus.
+                    DispatchQueue.main.async { draftTitleFocused = true }
+                }
+            HStack(spacing: 10) {
+                quickFieldMenu("Priority", options: model.schemaOptions.priorities,
+                               selection: $draft.priority)
+                quickFieldMenu("Category", options: model.schemaOptions.categories,
+                               selection: $draft.category)
+                dueMenu
+                Spacer()
+            }
+            .font(.caption)
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            if showDueDateField {
+                DatePicker("Due", selection: dueDateBinding, displayedComponents: .date)
+                    .datePickerStyle(.stepperField)
+                    .font(.caption)
+            }
+            HStack {
+                if let createError = model.createError {
+                    Text(createError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+                Spacer()
+                Button("Cancel") { model.closeComposer() }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+                Button {
+                    submitDraft()
+                } label: {
+                    if model.isCreating {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Text("Add")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(draft.trimmedTitle.isEmpty || model.isCreating)
+            }
+            Divider()
+        }
+    }
+
+    /// A single-select quick-field menu (#22): the schema's options plus None.
+    /// The label carries the choice, so a filled composer reads at a glance.
+    private func quickFieldMenu(
+        _ title: String, options: [String], selection: Binding<String?>
+    ) -> some View {
+        Menu(selection.wrappedValue ?? title) {
+            Button("None") { selection.wrappedValue = nil }
+            Divider()
+            ForEach(options, id: \.self) { option in
+                Button {
+                    selection.wrappedValue = option
+                } label: {
+                    if selection.wrappedValue == option {
+                        Label(option, systemImage: "checkmark")
+                    } else {
+                        Text(option)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Due quick picks (#22): the fast-capture cases plus a compact date field
+    /// for real deadlines — a calendar popover is too heavy for this panel,
+    /// and the custom filter set the no-calendar precedent (#6).
+    private var dueMenu: some View {
+        Menu(dueLabel) {
+            Button("None") {
+                draft.dueDate = nil
+                showDueDateField = false
+            }
+            Divider()
+            Button("Today") { pickDue(Calendar.current.startOfDay(for: Date())) }
+            Button("Tomorrow") { pickDue(ComposerDefaults.tomorrow(after: Date())) }
+            Button("Next Monday") { pickDue(ComposerDefaults.nextMonday(after: Date())) }
+            Divider()
+            Button("Pick a date…") {
+                if draft.dueDate == nil {
+                    draft.dueDate = Calendar.current.startOfDay(for: Date())
+                }
+                showDueDateField = true
+            }
+        }
+    }
+
+    private func pickDue(_ date: Date) {
+        draft.dueDate = date
+        showDueDateField = false
+    }
+
+    private var dueLabel: String {
+        guard let due = draft.dueDate else { return "Due" }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "d MMM"
+        return "Due \(formatter.string(from: due))"
+    }
+
+    /// The date field needs a non-optional Date; while it is showing, an unset
+    /// due date reads as today.
+    private var dueDateBinding: Binding<Date> {
+        Binding(get: { draft.dueDate ?? Calendar.current.startOfDay(for: Date()) },
+                set: { draft.dueDate = $0 })
+    }
+
+    private func submitDraft() {
+        guard !draft.trimmedTitle.isEmpty, !model.isCreating else { return }
+        Task { await model.createTask(draft) }
+    }
+
+    /// The one-shot "created, but this view filters it out" notice (#22).
+    /// Auto-dismisses: it is a confirmation, not an error to act on.
+    private func createNoticeText(_ notice: String) -> some View {
+        Text(notice)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .task {
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                model.clearCreateNotice()
+            }
     }
 
     private var tokenEntry: some View {

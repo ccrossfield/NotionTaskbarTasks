@@ -21,6 +21,11 @@ public enum NotionConfig {
     /// the open-status *filter*; this write menu can stay a known set.
     public static let selectableStatuses = ["Blocked", "To Do", "In Progress", "Done"]
 
+    /// Used until a schema fetch succeeds: the title property's name, which
+    /// keys the create payload (#22). The happy path resolves it from the
+    /// schema by type, so a rename in Notion is picked up on the next load.
+    public static let fallbackTitleProperty = "Task"
+
     /// Used only if the schema fetch fails. The happy path derives the open set
     /// and the Work category from the live schema (ADR-0001); these keep the app
     /// showing something sensible if that one request doesn't come back.
@@ -90,6 +95,51 @@ public struct NotionClient {
         let request = makeRequest(path: "data_sources/\(dataSourceID)", method: "GET")
         let data = try await send(request)
         return try JSONDecoder().decode(DataSourceSchema.self, from: data)
+    }
+
+    /// Creates a task page (#22): `POST /v1/pages` with the data-source parent —
+    /// the DB is multi-source, so the parent must target the primary source,
+    /// exactly like every query. Only the draft's set fields are sent, and
+    /// Status is deliberately omitted: Notion applies the DB's default status
+    /// option, where an explicit name would fail if that option were renamed.
+    /// Returns the task decoded from the response page — what Notion actually
+    /// stored (id, URL, the defaulted status), not an echo of the draft.
+    ///
+    /// `titleProperty` is the schema-resolved title property name: the write
+    /// payload is keyed by name, so this carries the decoder's find-by-type
+    /// rename-proofing over to the create path. Priority/Category/Due Date are
+    /// keyed by name with the same caveat as the decoder (NotionQueryResponse).
+    public func createTask(_ draft: TaskDraft, titleProperty: String) async throws -> NotionTask {
+        var properties: [String: Any] = [
+            titleProperty: ["title": [["text": ["content": draft.title]]]]
+        ]
+        if let priority = draft.priority {
+            properties["Priority"] = ["select": ["name": priority]]
+        }
+        if let category = draft.category {
+            properties["Category"] = ["select": ["name": category]]
+        }
+        if let due = draft.dueDate {
+            properties["Due Date"] = ["date": ["start": Self.dateOnlyString(from: due)]]
+        }
+        let request = makeRequest(path: "pages", method: "POST", jsonBody: [
+            "parent": ["type": "data_source_id", "data_source_id": dataSourceID],
+            "properties": properties,
+        ])
+        let data = try await send(request)
+        let page = try JSONDecoder().decode(NotionQueryResponse.Page.self, from: data)
+        return page.asTask
+    }
+
+    /// A Notion date-only value ("2026-07-14") for the local calendar day —
+    /// the mirror of the decoder's date-only parse, which anchors to local
+    /// midnight, so a due date round-trips onto the same day.
+    static func dateOnlyString(from date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
     }
 
     /// Writes a new status to a task's page. Body shape confirmed by the spike

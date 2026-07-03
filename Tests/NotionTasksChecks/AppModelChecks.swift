@@ -144,18 +144,33 @@ actor PatchGateHTTPClient: HTTPClient {
 /// Routes the schema GET vs the query POST to different canned bodies, so a full
 /// `AppModel.load` (which fetches both) can be exercised through the seam.
 /// `schemaStatusCode` lets a check fail the schema route while queries succeed (#14).
+/// The create route (POST /v1/pages, #22) replays `create`/`createStatusCode`;
+/// `requests` records everything received so a check can assert what was
+/// (or was not) sent.
 final class RoutingStubHTTPClient: HTTPClient {
     let schema: Data
     var query: Data
     var schemaStatusCode = 200
+    var create = Data()
+    var createStatusCode = 200
+    private(set) var requests: [URLRequest] = []
     init(schema: Data, query: Data) { self.schema = schema; self.query = query }
 
     func data(for request: URLRequest) async throws -> (Data, URLResponse) {
-        let isQuery = request.url?.absoluteString.hasSuffix("/query") ?? false
+        requests.append(request)
+        let url = request.url?.absoluteString ?? ""
+        let body: Data
+        let status: Int
+        if url.hasSuffix("/query") {
+            (body, status) = (query, 200)
+        } else if url.hasSuffix("/pages"), request.httpMethod == "POST" {
+            (body, status) = (create, createStatusCode)
+        } else {
+            (body, status) = (schema, schemaStatusCode)
+        }
         let response = HTTPURLResponse(
-            url: request.url!, statusCode: isQuery ? 200 : schemaStatusCode,
-            httpVersion: nil, headerFields: nil)!
-        return (isQuery ? query : schema, response)
+            url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!
+        return (body, response)
     }
 }
 
@@ -1263,5 +1278,244 @@ func appModelChecks(_ t: CheckRun) async {
         } else {
             t.expect(false, "expected the refreshed list to survive, got \(model.state)")
         }
+    }
+
+    t.suite("AppModel create task (#22)")
+
+    var createCal = Calendar(identifier: .gregorian)
+    createCal.timeZone = TimeZone(identifier: "Europe/London")!
+    let createToday = createCal.date(
+        from: DateComponents(year: 2026, month: 7, day: 15, hour: 12))!
+
+    /// A canned POST /v1/pages response: the created page as Notion returns it,
+    /// Status carrying whatever the DB defaulted (we never send one).
+    func createdPageJSON(id: String, title: String, status: String = "To Do",
+                         category: String? = nil, priority: String? = nil) -> Data {
+        var props = [
+            "\"Task\": { \"type\": \"title\", \"title\": [{ \"plain_text\": \"\(title)\" }] }",
+            "\"Status\": { \"type\": \"status\", \"status\": { \"name\": \"\(status)\" } }",
+        ]
+        if let category {
+            props.append("\"Category\": { \"type\": \"select\", \"select\": { \"name\": \"\(category)\" } }")
+        }
+        if let priority {
+            props.append("\"Priority\": { \"type\": \"select\", \"select\": { \"name\": \"\(priority)\" } }")
+        }
+        return Data("""
+        {
+          "id": "\(id)",
+          "created_time": "2026-07-15T09:00:00.000Z",
+          "last_edited_time": "2026-07-15T09:00:00.000Z",
+          "url": "https://www.notion.so/task-\(id)",
+          "properties": { \(props.joined(separator: ", ")) }
+        }
+        """.utf8)
+    }
+
+    /// A loaded model on the default Pivotal Priorities preset, with the
+    /// routing stub's create route primed by the caller.
+    func loadedModel(
+        stub: RoutingStubHTTPClient, cache: InMemoryTaskCache? = nil
+    ) async -> AppModel {
+        let model = AppModel(tokenStore: InMemoryTokenStore(seed: "ntn_saved"), cache: cache) {
+            NotionClient(dataSourceID: ds, token: $0, http: stub, sleep: { _ in })
+        }
+        await model.start()
+        return model
+    }
+
+    await t.test("a successful create appends the decoded task, caches it, and closes the composer") {
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        stub.create = createdPageJSON(id: "new-1", title: "Book the venue",
+                                      category: "👨🏻‍💻 Work", priority: "P1")
+        let cache = InMemoryTaskCache()
+        let model = await loadedModel(stub: stub, cache: cache)
+        model.openComposer()
+
+        let ok = await model.createTask(
+            TaskDraft(title: "Book the venue", priority: "P1", category: "👨🏻‍💻 Work"),
+            today: createToday, calendar: createCal)
+
+        t.expect(ok, "create should report success")
+        guard case .loaded(let tasks) = model.state else {
+            t.expect(false, "expected .loaded, got \(model.state)"); return
+        }
+        t.expectEqual(tasks.count, 6)
+        let added = try require(tasks.first { $0.id == "new-1" })
+        // The row is the response, not the draft: Notion's defaulted Status
+        // and the page URL prove the decode drove it.
+        t.expect(added.status == "To Do", "status was \(added.status ?? "nil")")
+        t.expectEqual(added.url, "https://www.notion.so/task-new-1")
+        t.expect(!model.isComposing, "composer closes on success")
+        t.expect(model.createError == nil, "no error expected, got \(model.createError ?? "nil")")
+        // Open Work task on Pivotal Priorities: visible, so no notice.
+        t.expect(model.createNotice == nil, "visible task needs no notice, got \(model.createNotice ?? "nil")")
+        t.expect(cache.saved.last?.tasks.contains { $0.id == "new-1" } == true,
+                 "the new task must be cached, or a relaunch loses it")
+        t.expectEqual(cache.saved.last?.fetchedAt, model.lastRefreshed)
+    }
+
+    await t.test("a create that doesn't match the active view sets the invisibility notice") {
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        // A personal-category task, created while Pivotal Priorities (Work
+        // only) is active: real in Notion, invisible in this view.
+        stub.create = createdPageJSON(id: "new-2", title: "Fix the bike",
+                                      category: "📝 Life admin")
+        let model = await loadedModel(stub: stub)
+        model.openComposer()
+
+        let ok = await model.createTask(TaskDraft(title: "Fix the bike", category: "📝 Life admin"),
+                                        today: createToday, calendar: createCal)
+
+        t.expect(ok, "the create itself succeeded")
+        t.expect(!model.isComposing, "composer still closes - the task was created")
+        let notice = model.createNotice ?? ""
+        t.expect(notice.contains("not visible"), "notice was \(notice)")
+        t.expect(notice.contains("Pivotal Priorities"), "notice should name the view, was \(notice)")
+        // The task is in the raw list all the same - switching view reveals it.
+        if case .loaded(let tasks) = model.state {
+            t.expect(tasks.contains { $0.id == "new-2" }, "task must be in the loaded list")
+        }
+    }
+
+    await t.test("the title is trimmed before it is sent") {
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        stub.create = createdPageJSON(id: "new-3", title: "Book the venue")
+        let model = await loadedModel(stub: stub)
+
+        _ = await model.createTask(TaskDraft(title: "  Book the venue \n"),
+                                   today: createToday, calendar: createCal)
+
+        let post = try require(stub.requests.first {
+            $0.httpMethod == "POST" && $0.url?.absoluteString.hasSuffix("/pages") == true
+        }, "expected a create request")
+        let body = try JSONSerialization.jsonObject(
+            with: try require(post.httpBody)) as? [String: Any]
+        let titleContent = ((((body?["properties"] as? [String: Any])?["Task"]
+            as? [String: Any])?["title"] as? [[String: Any]])?.first?["text"]
+            as? [String: Any])?["content"] as? String
+        t.expect(titleContent == "Book the venue", "title sent was \(titleContent ?? "nil")")
+    }
+
+    await t.test("a blank title sends nothing and fails quietly - Add should be disabled anyway") {
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        let model = await loadedModel(stub: stub)
+        model.openComposer()
+
+        let ok = await model.createTask(TaskDraft(title: "   \n"),
+                                        today: createToday, calendar: createCal)
+
+        t.expect(!ok, "a blank title must not create")
+        t.expect(!stub.requests.contains { $0.httpMethod == "POST"
+            && $0.url?.absoluteString.hasSuffix("/pages") == true },
+                 "no create request should be sent")
+        t.expect(model.isComposing, "composer stays open")
+    }
+
+    await t.test("a failed create keeps the composer open with an error, and the list unchanged") {
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        stub.createStatusCode = 500
+        let cache = InMemoryTaskCache()
+        let model = await loadedModel(stub: stub, cache: cache)
+        model.openComposer()
+        let savesAfterLoad = cache.saved.count
+
+        let ok = await model.createTask(TaskDraft(title: "Doomed"),
+                                        today: createToday, calendar: createCal)
+
+        t.expect(!ok, "the create failed")
+        t.expect(model.isComposing, "composer must stay open so the draft isn't lost")
+        t.expect(model.createError != nil, "an error must say why")
+        if case .loaded(let tasks) = model.state {
+            t.expectEqual(tasks.count, 5)
+        } else {
+            t.expect(false, "expected .loaded, got \(model.state)")
+        }
+        t.expectEqual(cache.saved.count, savesAfterLoad)
+    }
+
+    await t.test("a 401 on create drops the token and routes to reconnect, like every write (#13)") {
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        stub.createStatusCode = 401
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let model = AppModel(tokenStore: store) {
+            NotionClient(dataSourceID: ds, token: $0, http: stub, sleep: { _ in })
+        }
+        await model.start()
+
+        let ok = await model.createTask(TaskDraft(title: "Never lands"),
+                                        today: createToday, calendar: createCal)
+
+        t.expect(!ok, "the create failed")
+        t.expect(store.read() == nil, "the dead token must be dropped")
+        if case .failed = model.state {} else {
+            t.expect(false, "expected .failed (reconnect), got \(model.state)")
+        }
+    }
+
+    await t.test("a rate-limited create names the throttle rather than a generic failure") {
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        stub.createStatusCode = 429
+        let model = await loadedModel(stub: stub)
+        model.openComposer()
+
+        let ok = await model.createTask(TaskDraft(title: "Throttled"),
+                                        today: createToday, calendar: createCal)
+
+        t.expect(!ok, "the create failed")
+        t.expect(model.createError?.contains("rate-limiting") == true,
+                 "error was \(model.createError ?? "nil")")
+    }
+
+    await t.test("composerDraft pre-fills from the active view with schema-derived facts") {
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        let model = await loadedModel(stub: stub)
+
+        // Default preset is Pivotal Priorities: Category defaults to the
+        // schema-resolved Work option.
+        t.expectEqual(model.composerDraft(today: createToday, calendar: createCal),
+                      TaskDraft(category: "👨🏻‍💻 Work"))
+
+        model.selectPreset(.lateOrDueToday)
+        t.expectEqual(model.composerDraft(today: createToday, calendar: createCal),
+                      TaskDraft(dueDate: createCal.startOfDay(for: createToday)))
+
+        model.selectPreset(.homePriorities)
+        t.expectEqual(model.composerDraft(today: createToday, calendar: createCal), TaskDraft())
+    }
+
+    await t.test("opening the composer clears the previous attempt's messages") {
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        stub.createStatusCode = 500
+        let model = await loadedModel(stub: stub)
+        model.openComposer()
+        _ = await model.createTask(TaskDraft(title: "Doomed"),
+                                   today: createToday, calendar: createCal)
+        t.expect(model.createError != nil, "precondition: the create failed")
+
+        model.closeComposer()
+        t.expect(model.createError == nil, "closing discards the error with the draft")
+        model.openComposer()
+        t.expect(model.isComposing, "composer is open")
+        t.expect(model.createError == nil && model.createNotice == nil,
+                 "a fresh composition starts clean")
     }
 }
