@@ -4,7 +4,7 @@ Date: 2026-07-02
 
 ## Status
 
-Accepted. Confirmed end-to-end by a throwaway spike (`spike/`) against the live database on 2026-07-02.
+Accepted. Confirmed end-to-end by a throwaway spike against the live database on 2026-07-02. The spike was not preserved in the repo (see Verified).
 
 ## Context
 
@@ -31,4 +31,4 @@ The app reads and writes the "🎯 Tasks" Notion database via the raw REST API (
 
 ## Verified
 
-Spike on 2026-07-02 passed all of: auth, data-source schema retrieve, filtered query ("late or due today"), field decode (Status/Priority/Due/Category), sort, paging, and a live status round-trip. See `spike/NOTES.md`.
+Spike on 2026-07-02 passed all of: auth, data-source schema retrieve, filtered query ("late or due today"), field decode (Status/Priority/Due/Category), sort, paging, and a live status round-trip. The spike (a Python script plus notes under `spike/`) was throwaway and was deleted after this ADR was accepted; every fact it established is recorded in the Context and Decision sections above.

@@ -13,3 +13,7 @@ NotionTasks.app/
 
 # macOS
 .DS_Store
+
+# Throwaway API spike (deleted; ADR-0001 records its findings). Ignored so a
+# recreated scratch spike never lands in a commit by accident.
+spike/
