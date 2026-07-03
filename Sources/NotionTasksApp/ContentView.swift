@@ -39,6 +39,14 @@ struct ContentView: View {
                     .foregroundStyle(.red)
             }
 
+            // A refresh failed while a (possibly cached) list is showing: the
+            // list stays put, this says why it may be stale.
+            if let refreshError = model.refreshError {
+                Text(refreshError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
             Divider()
             footer
         }
@@ -364,6 +372,14 @@ struct ContentView: View {
         HStack {
             Button("Refresh") { Task { await model.refresh() } }
             Spacer()
+            // How old the list is — matters now that a cached snapshot can be
+            // on screen before the fetch lands. Live-updating relative text.
+            if let refreshed = model.lastRefreshed {
+                Text("Updated \(Text(refreshed, style: .relative)) ago")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
             Button("Quit") { NSApplication.shared.terminate(nil) }
         }
         .font(.callout)

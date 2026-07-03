@@ -18,6 +18,13 @@ public final class AppModel: ObservableObject {
     /// Set when a status write fails, so the UI can tell the user the change
     /// didn't take. Cleared when a write is attempted or succeeds.
     @Published public private(set) var writeError: String?
+    /// Set when a background refresh fails while a list is already on screen:
+    /// the list stays visible (stale beats blank) and this says why it's stale.
+    /// Cleared when the next refresh starts.
+    @Published public private(set) var refreshError: String?
+    /// When the tasks on screen were fetched from Notion. For a cached snapshot
+    /// this is the snapshot's fetch time — the honest age of what's shown.
+    @Published public private(set) var lastRefreshed: Date?
     /// The active preset. Published so switching it re-renders the list from the
     /// tasks already in hand — no re-fetch (#5). Defaults to Pivotal Priorities.
     @Published public private(set) var preset: Preset = .pivotalPriorities
@@ -30,7 +37,10 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var schemaOptions: SchemaOptions = .fallback
 
     private let tokenStore: TokenStore
+    private let cache: TaskCache?
     private let makeClient: (String) -> NotionClient
+    /// Injectable clock, so checks can pin the snapshot's `fetchedAt`.
+    private let now: () -> Date
 
     /// Schema-derived facts for the preset filters (ADR-0001). Set from the live
     /// schema on load; the fallbacks apply only if that fetch fails, so the list
@@ -39,10 +49,18 @@ public final class AppModel: ObservableObject {
     private var workCategory: String = NotionConfig.fallbackWorkCategory
     private var personalCategories: Set<String> = NotionConfig.fallbackPersonalCategories
 
-    /// - Parameter makeClient: builds a client for a token. Injected so tests
-    ///   can supply a stubbed transport; the app supplies `URLSession`.
-    public init(tokenStore: TokenStore, makeClient: @escaping (String) -> NotionClient) {
+    /// - Parameters:
+    ///   - cache: the last-fetched snapshot, shown instantly while a fresh fetch
+    ///     runs. `nil` means every launch starts from the spinner.
+    ///   - makeClient: builds a client for a token. Injected so tests can supply
+    ///     a stubbed transport; the app supplies `URLSession`.
+    public init(tokenStore: TokenStore,
+                cache: TaskCache? = nil,
+                now: @escaping () -> Date = Date.init,
+                makeClient: @escaping (String) -> NotionClient) {
         self.tokenStore = tokenStore
+        self.cache = cache
+        self.now = now
         self.makeClient = makeClient
     }
 
@@ -75,9 +93,17 @@ public final class AppModel: ObservableObject {
         writeError = nil
         do {
             try await makeClient(token).updateStatus(pageID: taskID, to: newStatus)
-            state = .loaded(tasks.map { task in
+            let updated = tasks.map { task in
                 task.id == taskID ? task.withStatus(newStatus) : task
-            })
+            }
+            state = .loaded(updated)
+            // Keep the cache in step, or a relaunch resurrects the old status
+            // from the stale snapshot. A write isn't a fetch, so the snapshot
+            // keeps its fetch time.
+            cache?.save(CachedSnapshot(
+                tasks: updated, openStatuses: openStatuses, workCategory: workCategory,
+                personalCategories: personalCategories, schemaOptions: schemaOptions,
+                fetchedAt: lastRefreshed ?? now()))
         } catch {
             writeError = "Couldn't update that task in Notion — it's unchanged. Try again."
         }
@@ -89,9 +115,11 @@ public final class AppModel: ObservableObject {
         await start()
     }
 
-    /// Forget the stored token and return to the entry field.
+    /// Forget the stored token and return to the entry field. The cached tasks
+    /// go with it — they belong to the account being disconnected.
     public func signOut() {
         try? tokenStore.delete()
+        cache?.clear()
         state = .needsToken
     }
 
@@ -134,8 +162,27 @@ public final class AppModel: ObservableObject {
             personalCategories: personalCategories, today: today, calendar: calendar)
     }
 
+    /// Show a snapshot: the tasks AND the schema facts they were filtered with,
+    /// so a cached list groups and filters exactly as it did when fetched.
+    private func apply(_ snapshot: CachedSnapshot) {
+        openStatuses = snapshot.openStatuses
+        workCategory = snapshot.workCategory
+        personalCategories = snapshot.personalCategories
+        schemaOptions = snapshot.schemaOptions
+        state = .loaded(snapshot.tasks)
+        lastRefreshed = snapshot.fetchedAt
+    }
+
     private func load(token: String) async {
-        state = .loading
+        refreshError = nil
+        // Something to show at once: the last-fetched snapshot beats a spinner.
+        if case .loaded = state {
+            // keep the current list visible
+        } else if let snapshot = cache?.load() {
+            apply(snapshot)
+        } else {
+            state = .loading
+        }
         let client = makeClient(token)
         do {
             // Schema first, so the open set is derived from the live schema
@@ -150,14 +197,31 @@ public final class AppModel: ObservableObject {
             }
             let tasks = try await client.fetchTasks()
             state = .loaded(tasks)
+            lastRefreshed = now()
+            cache?.save(CachedSnapshot(
+                tasks: tasks, openStatuses: openStatuses, workCategory: workCategory,
+                personalCategories: personalCategories, schemaOptions: schemaOptions,
+                fetchedAt: lastRefreshed ?? now()))
         } catch NotionClientError.unauthorized {
-            // The token is bad; drop it so the next launch re-prompts.
+            // The token is bad; drop it so the next launch re-prompts. This one
+            // interrupts even with a list on screen — showing stale data against
+            // a revoked token just defers the failure to the next write.
             try? tokenStore.delete()
             state = .failed("That token was rejected. Check it and enter it again.")
         } catch let NotionClientError.httpError(code) {
-            state = .failed("Notion returned an error (HTTP \(code)). Try again shortly.")
+            fail("Notion returned an error (HTTP \(code)). Try again shortly.")
         } catch {
-            state = .failed("Couldn't reach Notion. Check your connection and try again.")
+            fail("Couldn't reach Notion. Check your connection and try again.")
+        }
+    }
+
+    /// A fetch failed. With a list already on screen, keep it (stale beats
+    /// blank) and surface why; with nothing to show, fail properly.
+    private func fail(_ message: String) {
+        if case .loaded = state {
+            refreshError = message
+        } else {
+            state = .failed(message)
         }
     }
 }

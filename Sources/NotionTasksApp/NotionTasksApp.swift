@@ -7,6 +7,7 @@ struct NotionTasksApp: App {
 
     @StateObject private var model = AppModel(
         tokenStore: KeychainTokenStore(),
+        cache: FileTaskCache(),
         makeClient: { token in NotionClient(token: token, http: URLSession.shared) }
     )
 

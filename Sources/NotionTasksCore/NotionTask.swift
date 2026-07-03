@@ -2,7 +2,7 @@ import Foundation
 
 /// A task's priority. Backed by the Notion select-option names "P0"/"P1"/"P2".
 /// `rank` gives the sort order the priority views need later (#4/#5): P0 first.
-public enum Priority: String, Equatable, CaseIterable {
+public enum Priority: String, Equatable, CaseIterable, Codable {
     case p0 = "P0"
     case p1 = "P1"
     case p2 = "P2"
@@ -22,7 +22,7 @@ public enum Priority: String, Equatable, CaseIterable {
 ///
 /// The metadata fields (priority, due date, category, start-from) are all
 /// optional: a task in Notion need not set any of them.
-public struct NotionTask: Identifiable, Equatable {
+public struct NotionTask: Identifiable, Equatable, Codable {
     public let id: String
     public let title: String
     /// The Status option name (e.g. "To Do", "Blocked"), or `nil` if unset.

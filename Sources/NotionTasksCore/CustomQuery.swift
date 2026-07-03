@@ -3,7 +3,7 @@ import Foundation
 /// The filter option lists offered by the custom filter (#6), read wholesale
 /// from the live schema so a renamed or newly-added option needs no code change.
 /// Falls back to sensible constants only until the schema arrives.
-public struct SchemaOptions: Equatable {
+public struct SchemaOptions: Equatable, Codable {
     public let statuses: [String]
     public let categories: [String]
     public let priorities: [String]
