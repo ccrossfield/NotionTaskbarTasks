@@ -112,7 +112,13 @@ struct ContentView: View {
                 Image(systemName: "chevron.down").font(.caption2)
             }
         }
-        .menuStyle(.borderlessButton)
+        // Not .borderlessButton like the other menus: that style draws its own
+        // indicator arrow beside the custom chevron (two arrows on one title)
+        // and ignores .menuIndicator(.hidden). The custom trailing chevron is
+        // the sole affordance here.
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
         .fixedSize()
     }
 
