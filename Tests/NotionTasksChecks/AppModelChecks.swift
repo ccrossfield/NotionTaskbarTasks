@@ -576,6 +576,26 @@ func appModelChecks(_ t: CheckRun) async {
         t.expect(model.writeError != nil, "a failed write should surface an error")
     }
 
+    await t.test("a 401 on a status write clears the token and routes to re-entry, not 'try again'") {
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)
+        let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
+        await model.start()
+
+        stub.statusCode = 401 // the token is revoked between the load and the write
+        await model.setStatus(taskID: firstTaskID, to: "Done")
+
+        t.expect(store.read() == nil, "a rejected token must be cleared from the store")
+        if case .failed(let message) = model.state {
+            t.expect(message.localizedCaseInsensitiveContains("token"),
+                     "the failure must route the user to the token, said: \(message)")
+        } else {
+            t.expect(false, "expected .failed prompting for a token, got \(model.state)")
+        }
+        t.expect(model.writeError == nil,
+                 "'try again' can never succeed against a dead token, said: \(model.writeError ?? "nil")")
+    }
+
     t.suite("AppModel write/refresh interleavings")
 
     // tasks[1] in the fixture: "Draft the Q3 board update", To Do.

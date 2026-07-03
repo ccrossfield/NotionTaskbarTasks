@@ -109,6 +109,12 @@ public final class AppModel: ObservableObject {
                 tasks: updated, openStatuses: openStatuses, workCategory: workCategory,
                 personalCategories: personalCategories, schemaOptions: schemaOptions,
                 fetchedAt: lastRefreshed ?? now()))
+        } catch NotionClientError.unauthorized {
+            // The token died between the load and this write. "Try again" can
+            // never succeed, so mirror the load path (issue #13): drop the
+            // token and route the user back to entering one.
+            try? tokenStore.delete()
+            state = .failed("Notion rejected the stored token, so that change wasn't saved. Enter a new token to reconnect.")
         } catch {
             writeError = "Couldn't update that task in Notion — it's unchanged. Try again."
         }
