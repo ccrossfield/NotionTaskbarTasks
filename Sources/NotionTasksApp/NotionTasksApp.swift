@@ -8,13 +8,23 @@ struct NotionTasksApp: App {
     @StateObject private var model = AppModel(
         tokenStore: KeychainTokenStore(),
         cache: FileTaskCache(),
+        preferences: UserDefaultsPreferences(),
         makeClient: { token in NotionClient(token: token, http: URLSession.shared) }
     )
 
     var body: some Scene {
-        MenuBarExtra("Tasks", systemImage: "checklist") {
+        MenuBarExtra {
             ContentView()
                 .environmentObject(model)
+        } label: {
+            // The label exists from launch (the panel doesn't), so this is
+            // where the first fetch and the auto-refresh loop start (#7) —
+            // the list stays current even when the panel is never opened.
+            Image(systemName: "checklist")
+                .task {
+                    await model.start()
+                    model.startPolling()
+                }
         }
         .menuBarExtraStyle(.window)
     }

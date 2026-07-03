@@ -25,6 +25,12 @@ public final class AppModel: ObservableObject {
     /// When the tasks on screen were fetched from Notion. For a cached snapshot
     /// this is the snapshot's fetch time — the honest age of what's shown.
     @Published public private(set) var lastRefreshed: Date?
+    /// Whether a fetch is in flight. The list stays visible behind it (#7);
+    /// the view shows a small progress indicator instead of a blank flash.
+    @Published public private(set) var isRefreshing = false
+    /// Seconds between automatic re-fetches (#7). Read from preferences at
+    /// launch; changed via `setAutoRefreshInterval`.
+    @Published public private(set) var autoRefreshInterval: TimeInterval
     /// The active preset. Published so switching it re-renders the list from the
     /// tasks already in hand — no re-fetch (#5). Defaults to Pivotal Priorities.
     @Published public private(set) var preset: Preset = .pivotalPriorities
@@ -38,9 +44,15 @@ public final class AppModel: ObservableObject {
 
     private let tokenStore: TokenStore
     private let cache: TaskCache?
+    private let preferences: PreferencesStore?
     private let makeClient: (String) -> NotionClient
     /// Injectable clock, so checks can pin the snapshot's `fetchedAt`.
     private let now: () -> Date
+    /// The poll-timer seam: waits out one auto-refresh interval. Injected so
+    /// checks can drive "the interval elapses" without real waiting; the app
+    /// default is a plain `Task.sleep`.
+    private let pollSleep: @Sendable (TimeInterval) async -> Void
+    private var pollTask: Task<Void, Never>?
 
     /// Schema-derived facts for the preset filters (ADR-0001). Set from the live
     /// schema on load; the fallbacks apply only if that fetch fails, so the list
@@ -56,13 +68,25 @@ public final class AppModel: ObservableObject {
     ///     a stubbed transport; the app supplies `URLSession`.
     public init(tokenStore: TokenStore,
                 cache: TaskCache? = nil,
+                preferences: PreferencesStore? = nil,
                 now: @escaping () -> Date = Date.init,
+                pollSleep: @escaping @Sendable (TimeInterval) async -> Void = { seconds in
+                    try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                },
                 makeClient: @escaping (String) -> NotionClient) {
         self.tokenStore = tokenStore
         self.cache = cache
+        self.preferences = preferences
         self.now = now
+        self.pollSleep = pollSleep
         self.makeClient = makeClient
+        self.autoRefreshInterval =
+            preferences?.autoRefreshInterval ?? Self.defaultAutoRefreshInterval
     }
+
+    /// One minute: fresh enough for the menu-bar badge, and 1-2 requests a
+    /// minute is far inside Notion's ~3 req/s budget.
+    public static let defaultAutoRefreshInterval: TimeInterval = 60
 
     /// Call on launch. Loads tasks if a token is stored, else prompts for one.
     public func start() async {
@@ -124,6 +148,37 @@ public final class AppModel: ObservableObject {
     public func refresh() async {
         writeError = nil
         await start()
+    }
+
+    /// Auto-refresh at the preferred cadence (#7). Call once at launch.
+    public func startPolling() {
+        startPolling(every: autoRefreshInterval)
+    }
+
+    /// Change the auto-refresh cadence: persists it and, if the loop is
+    /// running, re-parks it at the new interval.
+    public func setAutoRefreshInterval(_ interval: TimeInterval) {
+        autoRefreshInterval = interval
+        preferences?.autoRefreshInterval = interval
+        if pollTask != nil { startPolling(every: interval) }
+    }
+
+    /// Auto-refresh: re-fetch every `interval` seconds until `stopPolling` (#7).
+    /// Restartable — a repeat call replaces the previous cadence.
+    public func startPolling(every interval: TimeInterval) {
+        stopPolling()
+        pollTask = Task { [weak self, pollSleep] in
+            while !Task.isCancelled {
+                await pollSleep(interval)
+                guard !Task.isCancelled, let self else { return }
+                await self.refresh()
+            }
+        }
+    }
+
+    public func stopPolling() {
+        pollTask?.cancel()
+        pollTask = nil
     }
 
     /// Forget the stored token and return to the entry field. The cached tasks
@@ -194,6 +249,8 @@ public final class AppModel: ObservableObject {
 
     private func load(token: String) async {
         refreshError = nil
+        isRefreshing = true
+        defer { isRefreshing = false }
         // Something to show at once: the last-fetched snapshot beats a spinner.
         if case .loaded = state {
             // keep the current list visible

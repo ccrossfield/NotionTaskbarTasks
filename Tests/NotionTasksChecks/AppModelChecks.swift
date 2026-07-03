@@ -58,6 +58,32 @@ actor GateHTTPClient: HTTPClient {
     }
 }
 
+/// The preferences seam's test double. The app uses `UserDefaultsPreferences`.
+final class InMemoryPreferences: PreferencesStore {
+    var autoRefreshInterval: TimeInterval?
+    init(autoRefreshInterval: TimeInterval? = nil) {
+        self.autoRefreshInterval = autoRefreshInterval
+    }
+}
+
+/// The poll-sleep seam's test double: each call parks until the check releases
+/// it with `tick()`, and records the interval it was asked to wait — so a check
+/// drives "the interval elapses" explicitly, with no real waiting.
+actor PollTicker {
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private(set) var intervals: [TimeInterval] = []
+
+    @Sendable func sleep(_ interval: TimeInterval) async {
+        intervals.append(interval)
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func tick() {
+        waiters.forEach { $0.resume() }
+        waiters.removeAll()
+    }
+}
+
 /// A transport that always throws — the "no network" case, which URLSession
 /// reports as a thrown error, never as an HTTP status.
 struct ThrowingHTTPClient: HTTPClient {
@@ -593,6 +619,130 @@ func appModelChecks(_ t: CheckRun) async {
         let unchanged = try require(tasks.first { $0.id == firstTaskID })
         t.expect(unchanged.status == "In Progress", "status drifted to \(unchanged.status ?? "nil")")
         t.expect(model.writeError != nil, "a failed write should surface an error")
+    }
+
+    t.suite("AppModel refresh liveness")
+
+    await t.test("isRefreshing is true only while a fetch is in flight, with the list kept visible") {
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let gate = GateHTTPClient(wrapping: RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response")), open: true)
+        let model = AppModel(tokenStore: store) {
+            NotionClient(dataSourceID: ds, token: $0, http: gate)
+        }
+        await model.start()
+        t.expect(!model.isRefreshing, "nothing is in flight after the load completes")
+        guard case .loaded(let original) = model.state else {
+            t.expect(false, "expected .loaded, got \(model.state)"); return
+        }
+
+        await gate.close()
+        let refresh = Task { await model.refresh() }
+        var spins = 0
+        while !model.isRefreshing, spins < 500 { await Task.yield(); spins += 1 }
+        t.expect(model.isRefreshing, "an in-flight refresh should be indicated")
+        t.expectEqual(model.state, .loaded(original)) // no blank flash behind the indicator
+
+        await gate.open()
+        await refresh.value
+        t.expect(!model.isRefreshing, "the indicator must clear once the fetch lands")
+    }
+
+    await t.test("a failed refresh also clears the in-flight indicator") {
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)
+        let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
+        await model.start()
+
+        stub.statusCode = 500
+        await model.refresh()
+
+        t.expect(!model.isRefreshing, "a failed fetch must not leave the indicator spinning")
+    }
+
+    await t.test("auto-refresh re-fetches each time the configured interval elapses") {
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)
+        let ticker = PollTicker()
+        let model = AppModel(tokenStore: store, pollSleep: ticker.sleep) {
+            NotionClient(dataSourceID: ds, token: $0, http: stub)
+        }
+        await model.start()
+        let fetchesAfterLoad = stub.requestCount
+
+        model.startPolling(every: 120)
+        var spins = 0
+        while await ticker.intervals.isEmpty, spins < 500 { await Task.yield(); spins += 1 }
+        t.expectEqual(stub.requestCount, fetchesAfterLoad) // parked: nothing until the interval elapses
+        t.expectEqual(await ticker.intervals.first, 120)
+
+        await ticker.tick() // the interval elapses
+        spins = 0
+        while stub.requestCount == fetchesAfterLoad, spins < 500 { await Task.yield(); spins += 1 }
+        t.expect(stub.requestCount > fetchesAfterLoad, "an elapsed interval should re-fetch")
+
+        // The loop parks again for the next cycle at the same cadence.
+        spins = 0
+        while await ticker.intervals.count < 2, spins < 500 { await Task.yield(); spins += 1 }
+        t.expectEqual(await ticker.intervals, [120, 120])
+        model.stopPolling()
+        await ticker.tick() // release the parked sleep so the cancelled loop can exit
+    }
+
+    await t.test("the poll cadence comes from preferences; changing it persists and re-parks the loop") {
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)
+        let prefs = InMemoryPreferences(autoRefreshInterval: 300)
+        let ticker = PollTicker()
+        let model = AppModel(tokenStore: store, preferences: prefs, pollSleep: ticker.sleep) {
+            NotionClient(dataSourceID: ds, token: $0, http: stub)
+        }
+        t.expectEqual(model.autoRefreshInterval, 300)
+        await model.start()
+
+        model.startPolling() // no argument: the cadence is the preferred one
+        var spins = 0
+        while await ticker.intervals.isEmpty, spins < 500 { await Task.yield(); spins += 1 }
+        t.expectEqual(await ticker.intervals, [300])
+
+        model.setAutoRefreshInterval(60)
+        t.expectEqual(prefs.autoRefreshInterval, 60) // persisted for the next launch
+        spins = 0
+        while await ticker.intervals.count < 2, spins < 500 { await Task.yield(); spins += 1 }
+        t.expectEqual(await ticker.intervals.last, 60) // the running loop re-parked at the new cadence
+
+        model.stopPolling()
+        await ticker.tick() // release the parked sleeps so the cancelled loops exit
+    }
+
+    await t.test("with no stored preference the poll cadence is the one-minute default") {
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)
+        let model = AppModel(tokenStore: store, preferences: InMemoryPreferences()) {
+            NotionClient(dataSourceID: ds, token: $0, http: stub)
+        }
+        t.expectEqual(model.autoRefreshInterval, 60)
+    }
+
+    await t.test("stopPolling halts the loop - an elapsing interval no longer fetches") {
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)
+        let ticker = PollTicker()
+        let model = AppModel(tokenStore: store, pollSleep: ticker.sleep) {
+            NotionClient(dataSourceID: ds, token: $0, http: stub)
+        }
+        await model.start()
+        model.startPolling(every: 60)
+        var spins = 0
+        while await ticker.intervals.isEmpty, spins < 500 { await Task.yield(); spins += 1 }
+
+        model.stopPolling()
+        let fetchesBefore = stub.requestCount
+        await ticker.tick()
+        for _ in 0..<100 { await Task.yield() }
+
+        t.expectEqual(stub.requestCount, fetchesBefore)
     }
 
     t.suite("AppModel failure legibility")

@@ -386,12 +386,51 @@ struct ContentView: View {
     }
 
     private var footer: some View {
-        HStack {
+        HStack(spacing: 8) {
             Button("Refresh") { Task { await model.refresh() } }
+            if model.isRefreshing {
+                ProgressView()
+                    .controlSize(.small)
+            } else if let lastRefreshed = model.lastRefreshed {
+                // When the data was last fetched (#7). An absolute clock time
+                // stays honest without ticking; the stale badge carries the
+                // "this is old" warning.
+                Text("Updated \(lastRefreshed.formatted(date: .omitted, time: .shortened))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Spacer()
+            settingsMenu
             Button("Quit") { NSApplication.shared.terminate(nil) }
         }
         .font(.callout)
+    }
+
+    /// The auto-refresh cadence options offered in settings (#7): label + seconds.
+    private static let refreshIntervals: [(title: String, seconds: TimeInterval)] = [
+        ("Every minute", 60), ("Every 5 minutes", 300), ("Every 15 minutes", 900),
+    ]
+
+    private var settingsMenu: some View {
+        Menu {
+            Menu("Auto-refresh") {
+                ForEach(Self.refreshIntervals, id: \.seconds) { option in
+                    Button {
+                        model.setAutoRefreshInterval(option.seconds)
+                    } label: {
+                        if model.autoRefreshInterval == option.seconds {
+                            Label(option.title, systemImage: "checkmark")
+                        } else {
+                            Text(option.title)
+                        }
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "gearshape")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
     }
 
     private func connect() {
