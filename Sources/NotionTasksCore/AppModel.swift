@@ -227,6 +227,10 @@ public final class AppModel: ObservableObject {
             // a revoked token just defers the failure to the next write.
             try? tokenStore.delete()
             state = .failed("That token was rejected. Check it and enter it again.")
+        } catch NotionClientError.rateLimited {
+            // The client already backed off and retried; naming the throttle
+            // stops it reading as an outage (issue #8).
+            fail("Notion is rate-limiting the app right now. Wait a minute, then refresh.")
         } catch let NotionClientError.httpError(code) {
             fail("Notion returned an error (HTTP \(code)). Try again shortly.")
         } catch {

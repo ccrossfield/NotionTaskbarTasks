@@ -58,6 +58,25 @@ actor GateHTTPClient: HTTPClient {
     }
 }
 
+/// A transport that always throws — the "no network" case, which URLSession
+/// reports as a thrown error, never as an HTTP status.
+struct ThrowingHTTPClient: HTTPClient {
+    let error: Error
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) { throw error }
+}
+
+/// Delegates to a stub until `error` is set, then throws it — lets a check load
+/// normally and only then pull the network out.
+final class SwitchableHTTPClient: HTTPClient {
+    var error: Error?
+    private let inner: HTTPClient
+    init(wrapping inner: HTTPClient) { self.inner = inner }
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        if let error { throw error }
+        return try await inner.data(for: request)
+    }
+}
+
 /// Wraps another stub and holds only PATCH requests at a gate, letting reads
 /// straight through — so a check can land a full refresh (or a second write's
 /// read of the state) while a status write is still in flight.
@@ -574,6 +593,96 @@ func appModelChecks(_ t: CheckRun) async {
         let unchanged = try require(tasks.first { $0.id == firstTaskID })
         t.expect(unchanged.status == "In Progress", "status drifted to \(unchanged.status ?? "nil")")
         t.expect(model.writeError != nil, "a failed write should surface an error")
+    }
+
+    t.suite("AppModel failure legibility")
+
+    await t.test("exhausted 429 backoff surfaces a throttled state, not a connection error") {
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let stub = StubHTTPClient(script: [
+            StubResponse(data: Data("{}".utf8), statusCode: 429), // last step repeats: throttled forever
+        ])
+        let model = AppModel(tokenStore: store) {
+            NotionClient(dataSourceID: ds, token: $0, http: stub, sleep: { _ in })
+        }
+
+        await model.start()
+
+        if case .failed(let message) = model.state {
+            t.expect(message.localizedCaseInsensitiveContains("rate"),
+                     "throttling must be named, not disguised as an outage: \(message)")
+            t.expect(!message.localizedCaseInsensitiveContains("connection"),
+                     "throttling is not a connection problem: \(message)")
+        } else {
+            t.expect(false, "expected .failed for sustained throttling, got \(model.state)")
+        }
+    }
+
+    await t.test("throttling during a refresh keeps the list and names the throttle") {
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)
+        let model = AppModel(tokenStore: store) {
+            NotionClient(dataSourceID: ds, token: $0, http: stub, sleep: { _ in })
+        }
+        await model.start()
+        guard case .loaded(let original) = model.state else {
+            t.expect(false, "expected .loaded, got \(model.state)"); return
+        }
+
+        stub.statusCode = 429
+        await model.refresh()
+
+        t.expectEqual(model.state, .loaded(original))
+        t.expect(model.refreshError?.localizedCaseInsensitiveContains("rate") == true,
+                 "the stale-list explanation should name throttling: \(model.refreshError ?? "nil")")
+    }
+
+    await t.test("no network on first load is a distinct offline state, not an empty list") {
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let offline = ThrowingHTTPClient(error: URLError(.notConnectedToInternet))
+        let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: offline) }
+
+        await model.start()
+
+        if case .failed(let message) = model.state {
+            t.expect(message.localizedCaseInsensitiveContains("connection"),
+                     "an offline failure should point at the connection: \(message)")
+        } else {
+            t.expect(false, "offline must never read as 'no tasks', got \(model.state)")
+        }
+    }
+
+    await t.test("no network during a refresh keeps the loaded list visible with an offline note") {
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let inner = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)
+        let flaky = SwitchableHTTPClient(wrapping: inner)
+        let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: flaky) }
+        await model.start()
+        guard case .loaded(let original) = model.state else {
+            t.expect(false, "expected .loaded, got \(model.state)"); return
+        }
+
+        flaky.error = URLError(.notConnectedToInternet)
+        await model.refresh()
+
+        t.expectEqual(model.state, .loaded(original))
+        t.expect(model.refreshError?.localizedCaseInsensitiveContains("connection") == true,
+                 "the stale-list explanation should point at the connection: \(model.refreshError ?? "nil")")
+    }
+
+    await t.test("a successful fetch with zero tasks is a genuine empty state, free of errors") {
+        let emptyQueryJSON = Data("""
+        { "object": "list", "results": [], "has_more": false, "next_cursor": null }
+        """.utf8)
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let stub = StubHTTPClient(responseData: emptyQueryJSON, statusCode: 200)
+        let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
+
+        await model.start()
+
+        t.expectEqual(model.state, .loaded([]))
+        t.expect(model.refreshError == nil, "an empty list is not a failure")
+        t.expect(model.writeError == nil, "an empty list is not a failure")
     }
 
     await t.test("a 401 on a status write clears the token and routes to re-entry, not 'try again'") {

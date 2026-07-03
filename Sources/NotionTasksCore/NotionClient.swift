@@ -127,7 +127,10 @@ public struct NotionClient {
             switch httpResponse.statusCode {
             case 200:
                 return data
-            case 401:
+            case 401, 403:
+                // 401: bad token. 403: valid token but no access to the DB
+                // (integration unshared). Both are fixed by sorting the token
+                // out, so both route to reconnect rather than a generic error.
                 throw NotionClientError.unauthorized
             case 429:
                 guard attempt < Self.maxRetries else {

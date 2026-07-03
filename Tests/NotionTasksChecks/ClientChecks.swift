@@ -109,6 +109,20 @@ func clientChecks(_ t: CheckRun) async {
         }
     }
 
+    await t.test("a 403 also surfaces as .unauthorized - the token lacks access, so reconnect") {
+        let stub = StubHTTPClient(responseData: Data("{}".utf8), statusCode: 403)
+        let client = NotionClient(dataSourceID: dataSource, token: "unshared", http: stub)
+        do {
+            _ = try await client.fetchTasks()
+            t.expect(false, "expected fetchTasks to throw")
+        } catch NotionClientError.unauthorized {
+            // pass — a 403 (integration not shared with the DB) is fixed the
+            // same way as a 401: by sorting the token out, not by retrying.
+        } catch {
+            t.expect(false, "wrong error: \(error)")
+        }
+    }
+
     await t.test("other non-200s surface as .httpError with the status code") {
         let stub = StubHTTPClient(responseData: Data(), statusCode: 500)
         let client = NotionClient(dataSourceID: dataSource, token: "t", http: stub)
