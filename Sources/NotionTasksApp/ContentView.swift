@@ -689,7 +689,7 @@ struct ContentView: View {
     private func dueText(_ text: String, bucket: DueBucket) -> some View {
         switch bucket {
         case .overdue:
-            Text(text).fontWeight(.semibold).foregroundStyle(.red)
+            Text(text).fontWeight(.semibold).foregroundStyle(Self.overdueRed)
         case .today:
             Text(text).foregroundStyle(Self.todayOrange)
         case .soon:
@@ -699,11 +699,17 @@ struct ContentView: View {
         }
     }
 
-    /// Custom adaptive colours for the "today" and "soon" buckets: the system
-    /// orange and yellow are both too bright to read at caption size on a
-    /// light background (yellow by inspection, orange by live test), so light
-    /// mode gets darker burnt-orange/ochre and dark mode brighter tones. The
-    /// two stay a hue apart so today reads hotter than the rest of the week.
+    /// Custom adaptive colours for the urgent buckets: the system red, orange
+    /// and yellow are all too bright to read at caption size on a light
+    /// background (yellow by inspection, orange and red by live test), so
+    /// light mode gets deeper crimson/burnt-orange/ochre and dark mode
+    /// brighter tones. The three stay a hue apart so overdue reads hottest.
+    private static let overdueRed = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(red: 1.00, green: 0.45, blue: 0.38, alpha: 1)
+            : NSColor(red: 0.72, green: 0.12, blue: 0.10, alpha: 1)
+    })
+
     private static let todayOrange = Color(nsColor: NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             ? NSColor(red: 1.00, green: 0.62, blue: 0.24, alpha: 1)
