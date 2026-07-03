@@ -17,6 +17,7 @@ struct ContentView: View {
                 Spacer()
                 staleBadge
                 refreshButton
+                settingsMenu
             }
 
             switch model.state {
@@ -52,12 +53,9 @@ struct ContentView: View {
                     .foregroundStyle(.red)
             }
 
-            Divider()
-            footer
         }
         .padding(12)
         .frame(width: 340)
-        .task { await model.start() }
     }
 
     /// The view picker doubles as the panel title: it shows the active view and
@@ -435,33 +433,20 @@ struct ContentView: View {
         }
     }
 
-    /// Refresh moved to the header icon (#18); the in-flight spinner lives
-    /// there too, so the clock time stays put during a fetch. Quit stays here
-    /// until the NSStatusItem shell (#20) deletes the footer entirely.
-    private var footer: some View {
-        HStack(spacing: 8) {
-            if let lastRefreshed = model.lastRefreshed {
-                // When the data was last fetched (#7). An absolute clock time
-                // stays honest without ticking; the stale badge carries the
-                // "this is old" warning.
-                Text("Updated \(lastRefreshed.formatted(date: .omitted, time: .shortened))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            settingsMenu
-            Button("Quit") { NSApplication.shared.terminate(nil) }
-        }
-        .font(.callout)
-    }
-
     /// The auto-refresh cadence options offered in settings (#7): label + seconds.
     private static let refreshIntervals: [(title: String, seconds: TimeInterval)] = [
         ("Every minute", 60), ("Every 5 minutes", 300), ("Every 15 minutes", 900),
     ]
 
+    /// In the header since the footer's deletion (#20). Quit moved to the menu
+    /// bar icon's right-click menu; the last-fetched clock (#7) lives here as a
+    /// passive first line — the stale badge still carries the warning role.
     private var settingsMenu: some View {
         Menu {
+            if let lastRefreshed = model.lastRefreshed {
+                Text("Updated \(lastRefreshed.formatted(date: .omitted, time: .shortened))")
+                Divider()
+            }
             Button {
                 model.setLaunchAtLogin(!model.launchAtLogin)
             } label: {
