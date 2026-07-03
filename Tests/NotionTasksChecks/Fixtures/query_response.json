@@ -48,7 +48,8 @@
           "type": "select",
           "select": { "id": "w-strat", "name": "Strategy", "color": "blue" }
         }
-      }
+      },
+      "url": "https://www.notion.so/Wire-up-the-menu-bar-read-path-11111111000000000000000000000001"
     },
     {
       "object": "page",
@@ -97,7 +98,8 @@
           "type": "select",
           "select": { "id": "w-report", "name": "Reporting/Comms", "color": "green" }
         }
-      }
+      },
+      "url": "https://www.notion.so/Draft-the-Q3-board-update-11111111000000000000000000000002"
     },
     {
       "object": "page",
@@ -136,7 +138,8 @@
           "type": "select",
           "select": { "id": "c-admin", "name": "📝 Life admin", "color": "brown" }
         }
-      }
+      },
+      "url": "https://www.notion.so/Chase-vendor-on-renewal-quote-11111111000000000000000000000003"
     },
     {
       "object": "page",
@@ -175,7 +178,8 @@
           "type": "select",
           "select": { "id": "c-tech", "name": "💻 Tech & Projects", "color": "purple" }
         }
-      }
+      },
+      "url": "https://www.notion.so/Renew-SSL-certificate-11111111000000000000000000000004"
     },
     {
       "object": "page",
@@ -214,7 +218,8 @@
           "type": "select",
           "select": null
         }
-      }
+      },
+      "url": "https://www.notion.so/Inbox-zero-sweep-11111111000000000000000000000005"
     }
   ],
   "next_cursor": null,

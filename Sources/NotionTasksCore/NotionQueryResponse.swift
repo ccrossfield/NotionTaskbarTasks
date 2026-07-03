@@ -31,12 +31,15 @@ public struct NotionQueryResponse: Decodable {
         /// not properties.
         let createdTime: String?
         let lastEditedTime: String?
+        /// The page's own Notion URL, a page-level field like the timestamps.
+        let url: String?
         public let properties: [String: Property]
 
         enum CodingKeys: String, CodingKey {
             case id
             case createdTime = "created_time"
             case lastEditedTime = "last_edited_time"
+            case url
             case properties
         }
 
@@ -54,7 +57,8 @@ public struct NotionQueryResponse: Decodable {
                 startFrom: NotionQueryResponse.date(from: properties["Start from"]?.date?.start),
                 createdTime: NotionQueryResponse.date(from: createdTime),
                 lastEditedTime: NotionQueryResponse.date(from: lastEditedTime),
-                workType: properties["WorkType"]?.select?.name
+                workType: properties["WorkType"]?.select?.name,
+                url: url
             )
         }
     }

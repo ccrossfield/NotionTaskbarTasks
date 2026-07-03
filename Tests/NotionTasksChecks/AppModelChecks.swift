@@ -257,6 +257,9 @@ func appModelChecks(_ t: CheckRun) async {
         t.expect(done.priority == "P0", "priority drifted to \(String(describing: done.priority))")
         t.expect(done.category == "👨🏻‍💻 Work", "category drifted to \(done.category ?? "nil")")
         t.expect(done.dueDate != nil, "due date was dropped on status change")
+        t.expectEqual(
+            done.url,
+            "https://www.notion.so/Draft-the-Q3-board-update-11111111000000000000000000000002")
     }
 
     await t.test("after loading, Pivotal Priorities groups open Work tasks by schema-derived open set") {

@@ -28,6 +28,10 @@ public struct NotionTask: Identifiable, Equatable, Codable {
     /// The WorkType select-option name (e.g. "Strategy", "PIVOT"). A custom
     /// filter field (#6); the values come from the schema, not a fixed set.
     public let workType: String?
+    /// The page's own Notion URL ("https://www.notion.so/<slug>-<id>"), for
+    /// opening the task in Notion (#21). Optional so snapshots cached before
+    /// this field existed still decode; it refills on the next refresh.
+    public let url: String?
 
     public init(
         id: String,
@@ -39,7 +43,8 @@ public struct NotionTask: Identifiable, Equatable, Codable {
         startFrom: Date? = nil,
         createdTime: Date? = nil,
         lastEditedTime: Date? = nil,
-        workType: String? = nil
+        workType: String? = nil,
+        url: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -51,6 +56,7 @@ public struct NotionTask: Identifiable, Equatable, Codable {
         self.createdTime = createdTime
         self.lastEditedTime = lastEditedTime
         self.workType = workType
+        self.url = url
     }
 
     /// A copy with a new status, keeping every other field. Used by the write
@@ -59,7 +65,25 @@ public struct NotionTask: Identifiable, Equatable, Codable {
         NotionTask(
             id: id, title: title, status: newStatus, priority: priority,
             dueDate: dueDate, category: category, startFrom: startFrom,
-            createdTime: createdTime, lastEditedTime: lastEditedTime, workType: workType)
+            createdTime: createdTime, lastEditedTime: lastEditedTime, workType: workType,
+            url: url)
+    }
+
+    /// The task's page URL as a value the view can hand to `NSWorkspace` (#21).
+    /// `nil` when the page URL is absent or malformed.
+    public var webURL: URL? {
+        url.flatMap(URL.init(string:))
+    }
+
+    /// The Notion desktop app deep link: the web URL with its scheme swapped
+    /// to `notion://`, which the desktop app registers. The view prefers this
+    /// when an app is installed to handle it, falling back to `webURL` (#21).
+    public var notionAppURL: URL? {
+        guard let webURL,
+              var components = URLComponents(url: webURL, resolvingAgainstBaseURL: false)
+        else { return nil }
+        components.scheme = "notion"
+        return components.url
     }
 
     /// The due date rendered relative to `now`: "Overdue" for a past day,

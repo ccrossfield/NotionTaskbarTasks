@@ -46,4 +46,24 @@ func taskPresentationChecks(_ t: CheckRun) async {
         let text = taskDue(noon(2026, 12, 25, cal)).relativeDueText(now: today, calendar: cal, locale: locale)
         t.expect(text == "25 Dec", "expected '25 Dec', got \(text ?? "nil")")
     }
+
+    t.suite("Opening a task in Notion (#21)")
+
+    await t.test("the desktop-app deep link is the web URL with a notion:// scheme") {
+        let task = NotionTask(
+            id: "x", title: "t", status: nil,
+            url: "https://www.notion.so/Draft-the-Q3-board-update-11111111000000000000000000000002")
+        t.expectEqual(
+            task.notionAppURL?.absoluteString,
+            "notion://www.notion.so/Draft-the-Q3-board-update-11111111000000000000000000000002")
+        t.expectEqual(
+            task.webURL?.absoluteString,
+            "https://www.notion.so/Draft-the-Q3-board-update-11111111000000000000000000000002")
+    }
+
+    await t.test("a task without a URL yields no open targets") {
+        let task = NotionTask(id: "x", title: "t", status: nil)
+        t.expect(task.webURL == nil, "expected nil webURL")
+        t.expect(task.notionAppURL == nil, "expected nil notionAppURL")
+    }
 }

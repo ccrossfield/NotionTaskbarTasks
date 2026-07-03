@@ -26,6 +26,38 @@ func decodingChecks(_ t: CheckRun) async {
         t.expect(inbox.status == nil, "expected nil status, got \(inbox.status ?? "nil")")
     }
 
+    await t.test("each task carries its page's Notion URL (#21)") {
+        let tasks = try JSONDecoder().decode(
+            NotionQueryResponse.self, from: try fixtureData("query_response")).tasks
+        t.expectEqual(
+            tasks[0].url,
+            "https://www.notion.so/Wire-up-the-menu-bar-read-path-11111111000000000000000000000001")
+        t.expectEqual(
+            tasks[4].url,
+            "https://www.notion.so/Inbox-zero-sweep-11111111000000000000000000000005")
+    }
+
+    await t.test("a page without url decodes with url nil (#21)") {
+        // Real page objects always carry `url`; this guards the decoder against
+        // its absence anyway, since a nil url just disables open-in-Notion.
+        let json = """
+        {
+          "object": "list",
+          "results": [{
+            "id": "no-url-task",
+            "properties": {
+              "Task": { "type": "title", "title": [{ "plain_text": "No URL" }] }
+            }
+          }],
+          "next_cursor": null,
+          "has_more": false
+        }
+        """
+        let tasks = try JSONDecoder().decode(
+            NotionQueryResponse.self, from: Data(json.utf8)).tasks
+        t.expect(tasks[0].url == nil, "expected nil url, got \(tasks[0].url ?? "nil")")
+    }
+
     await t.test("paging fields decode") {
         let response = try JSONDecoder().decode(
             NotionQueryResponse.self, from: try fixtureData("query_response"))

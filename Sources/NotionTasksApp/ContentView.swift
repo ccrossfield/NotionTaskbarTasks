@@ -357,12 +357,50 @@ struct ContentView: View {
         HStack(alignment: .top, spacing: 8) {
             completeButton(for: task)
             VStack(alignment: .leading, spacing: 2) {
-                Text(task.title)
-                    .lineLimit(2)
+                title(for: task)
                 metadata(for: task, showPriority: showPriority)
             }
             Spacer(minLength: 8)
             statusMenu(for: task)
+        }
+        .contextMenu {
+            if task.webURL != nil {
+                Button("Open in Notion") { openInNotion(task) }
+            }
+        }
+    }
+
+    /// Line 1: the title. Clicking it opens the task in Notion (#21), so
+    /// fields the app doesn't edit are one click away; the row's context menu
+    /// carries the same action for discoverability. A task with no URL (only
+    /// possible from a pre-#21 cached snapshot) renders as plain text.
+    @ViewBuilder
+    private func title(for task: NotionTask) -> some View {
+        if task.webURL != nil {
+            Button {
+                openInNotion(task)
+            } label: {
+                Text(task.title)
+                    .lineLimit(2)
+            }
+            .buttonStyle(.plain)
+            .help("Open in Notion")
+        } else {
+            Text(task.title)
+                .lineLimit(2)
+        }
+    }
+
+    /// The only open-target decision in the view: prefer the notion:// deep
+    /// link when an app is installed to handle it (the Notion desktop app),
+    /// otherwise the web URL in the default browser.
+    private func openInNotion(_ task: NotionTask) {
+        guard let web = task.webURL else { return }
+        if let deep = task.notionAppURL,
+           NSWorkspace.shared.urlForApplication(toOpen: deep) != nil {
+            NSWorkspace.shared.open(deep)
+        } else {
+            NSWorkspace.shared.open(web)
         }
     }
 
