@@ -719,9 +719,11 @@ struct ContentView: View {
         ("Every minute", 60), ("Every 5 minutes", 300), ("Every 15 minutes", 900),
     ]
 
-    /// In the header since the footer's deletion (#20). Quit moved to the menu
-    /// bar icon's right-click menu; the last-fetched clock (#7) lives here as a
-    /// passive first line — the stale badge still carries the warning role.
+    /// In the header since the footer's deletion (#20). The last-fetched clock
+    /// (#7) lives here as a passive first line — the stale badge still carries
+    /// the warning role. Quit appears both here and in the menu bar icon's
+    /// right-click menu (#24): right-click is invisible to anyone who hasn't
+    /// tried it, so the gear menu carries the discoverable copy.
     private var settingsMenu: some View {
         Menu {
             if let lastRefreshed = model.lastRefreshed {
@@ -750,6 +752,13 @@ struct ContentView: View {
                     }
                 }
             }
+            Divider()
+            // Same label and shortcut as the right-click item — two items
+            // doing the same thing must read the same.
+            Button("Quit Notion Tasks") {
+                NSApp.terminate(nil)
+            }
+            .keyboardShortcut("q")
         } label: {
             Image(systemName: "gearshape")
         }
