@@ -27,6 +27,9 @@ final class StubHTTPClient: HTTPClient {
     var responseData: Data
     var statusCode: Int
     private(set) var lastRequest: URLRequest?
+    /// Every request received, in order — lets a check assert on an earlier
+    /// request in a multi-page sequence, not just the last.
+    private(set) var requests: [URLRequest] = []
     private(set) var requestCount = 0
 
     private let script: [StubResponse]?
@@ -47,6 +50,7 @@ final class StubHTTPClient: HTTPClient {
 
     func data(for request: URLRequest) async throws -> (Data, URLResponse) {
         lastRequest = request
+        requests.append(request)
         defer { requestCount += 1 }
 
         let data: Data
@@ -152,6 +156,74 @@ func clientChecks(_ t: CheckRun) async {
         } catch {
             t.expect(false, "wrong error: \(error)")
         }
+    }
+
+    t.suite("NotionClient pagination")
+
+    // A minimal query-response page: one task, plus the paging fields. The real
+    // DB has >100 tasks, so a single page_size:100 request silently drops the
+    // rest — fetchTasks must follow next_cursor until has_more is false.
+    func pageJSON(taskID: String, title: String, nextCursor: String?) -> Data {
+        let cursorFields = nextCursor.map { "\"has_more\": true, \"next_cursor\": \"\($0)\"" }
+            ?? "\"has_more\": false, \"next_cursor\": null"
+        return Data("""
+        {
+          "object": "list",
+          "results": [{
+            "id": "\(taskID)",
+            "properties": {
+              "Task": { "type": "title", "title": [{ "plain_text": "\(title)" }] }
+            }
+          }],
+          \(cursorFields)
+        }
+        """.utf8)
+    }
+
+    await t.test("fetchTasks follows next_cursor and returns every page's tasks") {
+        let stub = StubHTTPClient(script: [
+            StubResponse(data: pageJSON(taskID: "t1", title: "First", nextCursor: "cur-2"), statusCode: 200),
+            StubResponse(data: pageJSON(taskID: "t2", title: "Second", nextCursor: "cur-3"), statusCode: 200),
+            StubResponse(data: pageJSON(taskID: "t3", title: "Third", nextCursor: nil), statusCode: 200),
+        ])
+        let client = NotionClient(dataSourceID: dataSource, token: "ntn_test", http: stub)
+
+        let tasks = try await client.fetchTasks()
+
+        t.expectEqual(stub.requestCount, 3)
+        t.expectEqual(tasks.map(\.title), ["First", "Second", "Third"])
+    }
+
+    await t.test("the first request has no start_cursor; follow-ups carry the previous next_cursor") {
+        let stub = StubHTTPClient(script: [
+            StubResponse(data: pageJSON(taskID: "t1", title: "First", nextCursor: "cur-2"), statusCode: 200),
+            StubResponse(data: pageJSON(taskID: "t2", title: "Second", nextCursor: nil), statusCode: 200),
+        ])
+        let client = NotionClient(dataSourceID: dataSource, token: "ntn_test", http: stub)
+
+        _ = try await client.fetchTasks()
+
+        t.expectEqual(stub.requests.count, 2)
+        let firstBody = try JSONSerialization.jsonObject(
+            with: try require(stub.requests.first?.httpBody)) as? [String: Any]
+        t.expect(firstBody?["start_cursor"] == nil, "first request must not send a cursor")
+        let secondBody = try JSONSerialization.jsonObject(
+            with: try require(stub.requests.last?.httpBody)) as? [String: Any]
+        t.expect(secondBody?["start_cursor"] as? String == "cur-2",
+                 "second request cursor was \(secondBody?["start_cursor"] as? String ?? "nil")")
+        t.expect(secondBody?["page_size"] as? Int == 100, "page_size must persist across pages")
+    }
+
+    await t.test("a single page with has_more false makes exactly one request") {
+        let stub = StubHTTPClient(script: [
+            StubResponse(data: try fixtureData("query_response"), statusCode: 200),
+        ])
+        let client = NotionClient(dataSourceID: dataSource, token: "ntn_test", http: stub)
+
+        let tasks = try await client.fetchTasks()
+
+        t.expectEqual(stub.requestCount, 1)
+        t.expectEqual(tasks.count, 5)
     }
 
     t.suite("NotionClient rate-limit backoff")

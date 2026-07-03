@@ -61,12 +61,27 @@ public struct NotionClient {
         self.sleep = sleep
     }
 
+    /// Fetches every task, following `next_cursor` until `has_more` is false.
+    /// Notion caps a query response at 100 pages of results, so a single request
+    /// silently drops everything past the first 100 tasks.
     public func fetchTasks() async throws -> [NotionTask] {
-        let request = makeRequest(path: "data_sources/\(dataSourceID)/query",
-                                  method: "POST",
-                                  jsonBody: ["page_size": 100])
-        let data = try await send(request)
-        return try JSONDecoder().decode(NotionQueryResponse.self, from: data).tasks
+        var tasks: [NotionTask] = []
+        var cursor: String?
+        // Backstop against a paging loop that never terminates (a misbehaving
+        // cursor); 100 pages = 10,000 tasks, far beyond this personal DB.
+        for _ in 0..<100 {
+            var body: [String: Any] = ["page_size": 100]
+            if let cursor { body["start_cursor"] = cursor }
+            let request = makeRequest(path: "data_sources/\(dataSourceID)/query",
+                                      method: "POST",
+                                      jsonBody: body)
+            let data = try await send(request)
+            let page = try JSONDecoder().decode(NotionQueryResponse.self, from: data)
+            tasks.append(contentsOf: page.tasks)
+            guard page.hasMore, let next = page.nextCursor else { return tasks }
+            cursor = next
+        }
+        return tasks
     }
 
     /// Reads the data source schema (`GET /v1/data_sources/{id}`). Used to derive
