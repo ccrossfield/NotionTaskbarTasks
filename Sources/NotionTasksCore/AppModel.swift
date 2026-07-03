@@ -82,6 +82,13 @@ public final class AppModel: ObservableObject {
         self.makeClient = makeClient
         self.autoRefreshInterval =
             preferences?.autoRefreshInterval ?? Self.defaultAutoRefreshInterval
+        // Reopen the way the app was left (#9) — restored here, before any
+        // fetch, so the first render is already the remembered view.
+        if let config = preferences?.viewConfig {
+            self.preset = config.preset
+            self.isCustom = config.isCustom
+            self.customQuery = config.customQuery
+        }
     }
 
     /// One minute: fresh enough for the menu-bar badge, and 1-2 requests a
@@ -195,17 +202,27 @@ public final class AppModel: ObservableObject {
     public func selectPreset(_ preset: Preset) {
         self.preset = preset
         isCustom = false
+        persistViewConfig()
     }
 
     /// Switch to the custom filter/sort view, keeping whatever query was last
     /// composed (#6).
     public func enterCustom() {
         isCustom = true
+        persistViewConfig()
     }
 
     /// Replace the custom filter/sort. Republishes so the list reflows at once.
     public func updateCustom(_ query: CustomQuery) {
         customQuery = query
+        persistViewConfig()
+    }
+
+    /// Every view change is remembered at once (#9); there is no "save" moment
+    /// a menu bar app could reliably hook instead.
+    private func persistViewConfig() {
+        preferences?.viewConfig = ViewConfig(preset: preset, isCustom: isCustom,
+                                             customQuery: customQuery)
     }
 
     /// Whether what's on screen is over a minute old — the threshold for the

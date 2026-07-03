@@ -27,7 +27,7 @@ public struct SchemaOptions: Equatable, Codable {
 /// How a date field is filtered. Relative to today rather than an absolute date,
 /// matching how the real Notion views filter (≤ today, empty-or-≤-today) and
 /// keeping the menu-bar UI free of a date picker.
-public enum DateFilter: String, CaseIterable, Equatable {
+public enum DateFilter: String, CaseIterable, Equatable, Codable {
     case any
     case onOrBeforeToday
     case afterToday
@@ -46,7 +46,7 @@ public enum DateFilter: String, CaseIterable, Equatable {
 }
 
 /// The field a custom view sorts on (#6).
-public enum SortField: String, CaseIterable, Equatable {
+public enum SortField: String, CaseIterable, Equatable, Codable {
     case dueDate
     case priority
     case created
@@ -65,7 +65,7 @@ public enum SortField: String, CaseIterable, Equatable {
 /// A user-composed filter + sort (#6). Each select filter is a set of allowed
 /// option names; an *empty* set means "any" (no constraint on that field). The
 /// filters combine with AND. Sort is a field plus a direction.
-public struct CustomQuery: Equatable {
+public struct CustomQuery: Equatable, Codable {
     public var statuses: Set<String>
     public var categories: Set<String>
     public var priorities: Set<String>

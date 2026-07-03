@@ -61,6 +61,7 @@ actor GateHTTPClient: HTTPClient {
 /// The preferences seam's test double. The app uses `UserDefaultsPreferences`.
 final class InMemoryPreferences: PreferencesStore {
     var autoRefreshInterval: TimeInterval?
+    var viewConfig: ViewConfig?
     init(autoRefreshInterval: TimeInterval? = nil) {
         self.autoRefreshInterval = autoRefreshInterval
     }
@@ -619,6 +620,64 @@ func appModelChecks(_ t: CheckRun) async {
         let unchanged = try require(tasks.first { $0.id == firstTaskID })
         t.expect(unchanged.status == "In Progress", "status drifted to \(unchanged.status ?? "nil")")
         t.expect(model.writeError != nil, "a failed write should surface an error")
+    }
+
+    t.suite("AppModel remembered setup")
+
+    await t.test("the last-used preset is restored before the first fetch renders") {
+        let prefs = InMemoryPreferences()
+        prefs.viewConfig = ViewConfig(preset: .lateOrDueToday, isCustom: false,
+                                      customQuery: .empty)
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)
+        let model = AppModel(tokenStore: store, preferences: prefs) {
+            NotionClient(dataSourceID: ds, token: $0, http: stub)
+        }
+
+        // No fetch has run yet: the remembered view is already active.
+        t.expectEqual(model.preset, .lateOrDueToday)
+        t.expect(!model.isCustom, "a preset launch stays a preset launch")
+        t.expectEqual(stub.requestCount, 0)
+    }
+
+    await t.test("a custom filter and its sort order are restored across restarts") {
+        let rememberedQuery = CustomQuery(workTypes: ["PIVOT"], sortField: .created, ascending: false)
+        let prefs = InMemoryPreferences()
+        prefs.viewConfig = ViewConfig(preset: .pivotalPriorities, isCustom: true,
+                                      customQuery: rememberedQuery)
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)
+        let model = AppModel(tokenStore: store, preferences: prefs) {
+            NotionClient(dataSourceID: ds, token: $0, http: stub)
+        }
+
+        t.expect(model.isCustom, "the app should reopen in the custom view it was left in")
+        t.expectEqual(model.customQuery, rememberedQuery)
+    }
+
+    await t.test("preset, custom mode, and query changes are persisted for the next launch") {
+        let prefs = InMemoryPreferences()
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)
+        let model = AppModel(tokenStore: store, preferences: prefs) {
+            NotionClient(dataSourceID: ds, token: $0, http: stub)
+        }
+        await model.start()
+
+        model.selectPreset(.homePriorities)
+        t.expectEqual(prefs.viewConfig?.preset, .homePriorities)
+        t.expectEqual(prefs.viewConfig?.isCustom, false)
+
+        model.enterCustom()
+        t.expectEqual(prefs.viewConfig?.isCustom, true)
+
+        let query = CustomQuery(statuses: ["Blocked"], sortField: .lastEdited, ascending: true)
+        model.updateCustom(query)
+        t.expectEqual(prefs.viewConfig?.customQuery, query)
+
+        model.selectPreset(.allOpen) // leaving custom is remembered too
+        t.expectEqual(prefs.viewConfig?.preset, .allOpen)
+        t.expectEqual(prefs.viewConfig?.isCustom, false)
     }
 
     t.suite("AppModel refresh liveness")

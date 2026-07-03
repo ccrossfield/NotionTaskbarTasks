@@ -8,6 +8,7 @@ await taskPresentationChecks(checks)
 await taskListEngineChecks(checks)
 await clientChecks(checks)
 await taskCacheChecks(checks)
+await preferencesChecks(checks)
 await appModelChecks(checks)
 
 checks.finish()

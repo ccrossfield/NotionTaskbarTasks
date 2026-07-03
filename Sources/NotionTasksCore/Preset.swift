@@ -4,7 +4,7 @@ import Foundation
 /// existing Notion view. Pivotal Priorities is the launch default (#4).
 ///
 /// `CaseIterable` order is the picker order.
-public enum Preset: String, CaseIterable, Identifiable, Equatable {
+public enum Preset: String, CaseIterable, Identifiable, Equatable, Codable {
     case pivotalPriorities
     case lateOrDueToday
     case homePriorities
