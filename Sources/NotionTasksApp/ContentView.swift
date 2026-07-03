@@ -138,11 +138,26 @@ struct ContentView: View {
                     .background(GeometryReader { geo in
                         Color.clear.preference(key: ListHeightKey.self, value: geo.size.height)
                     })
+                    // Force a fresh measurement whenever the visible rows change.
+                    // A flat (custom) result is always one group with priority nil,
+                    // so its identity never changes across filters; without this the
+                    // GeometryReader keeps a stale height and the panel mis-sizes.
+                    .id(listSignature(groups))
                 }
                 .frame(height: min(listHeight, maxListHeight))
                 .onPreferenceChange(ListHeightKey.self) { listHeight = $0 }
             }
         }
+    }
+
+    /// A signature of exactly what the list is showing — group priorities plus
+    /// each group's task ids in order. Used as the measured subtree's `.id` so a
+    /// filter or sort change (which reorders or swaps rows) forces a re-measure,
+    /// and a reorder-only change is caught too (ids in order).
+    private func listSignature(_ groups: [TaskGroup]) -> String {
+        groups
+            .map { ($0.priority?.rawValue ?? "flat") + ":" + $0.tasks.map(\.id).joined(separator: ",") }
+            .joined(separator: "|")
     }
 
     /// The custom view's controls (#6): one "Filter" menu (with a submenu per
