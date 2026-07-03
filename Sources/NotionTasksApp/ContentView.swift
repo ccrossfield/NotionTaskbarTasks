@@ -236,6 +236,12 @@ struct ContentView: View {
                 }
             }
         }
+        // ViewThatFits caches its choice and doesn't re-evaluate when a chip
+        // label changes width (verified with an offscreen sizeThatFits
+        // harness: the unkeyed footer never re-measures in either direction).
+        // Recreating it whenever a label changes forces a fresh choice, so
+        // the footer re-merges after a long selection is undone.
+        .id("\(draft.priority ?? "")|\(draft.category ?? "")|\(dueLabel)")
     }
 
     /// The chips report their ideal width (`fixedSize`) so ViewThatFits
