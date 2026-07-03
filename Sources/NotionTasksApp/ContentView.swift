@@ -5,9 +5,10 @@ struct ContentView: View {
     @EnvironmentObject private var model: AppModel
     @State private var tokenField = ""
 
-    /// Cap the list height before it scrolls, so the panel never fills the
-    /// screen. Below this, the list is a plain self-sizing `VStack`.
-    private let maxListHeight: CGFloat = 360
+    /// Fixed height for the loaded content region (controls + list). The
+    /// MenuBarExtra window doesn't reliably resize to changing content, so a
+    /// constant height gives it one size to adopt; the list scrolls inside it.
+    private let loadedHeight: CGFloat = 380
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -21,10 +22,13 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 8)
             case .loaded:
-                if model.isCustom {
-                    customControls
+                VStack(alignment: .leading, spacing: 8) {
+                    if model.isCustom {
+                        customControls
+                    }
+                    taskList
                 }
-                taskList
+                .frame(height: loadedHeight)
             case .failed(let message):
                 failure(message)
             }
@@ -104,28 +108,23 @@ struct ContentView: View {
         let emptyMessage = model.isCustom
             ? "No tasks match this filter."
             : "Nothing in \(model.activeTitle) right now."
-        // A plain VStack sizes to its content correctly; a ScrollView reports a
-        // near-zero ideal height and would collapse the panel. So only wrap in a
-        // (capped) ScrollView once the content is tall enough to need scrolling;
-        // otherwise let the VStack size the panel. The estimate only picks the
-        // branch — it never sets the height — so it needn't be pixel-accurate.
-        let rowCount = groups.reduce(0) { $0 + $1.tasks.count }
-        let headerCount = grouped ? groups.count : 0
-        let estimatedHeight = CGFloat(rowCount) * 62 + CGFloat(headerCount) * 28
+        // Always scroll inside the fixed region set in `body`. The MenuBarExtra
+        // window doesn't reliably resize to changing content, so a self-sizing
+        // list gets clipped by a too-small window and its lower rows vanish. A
+        // fixed panel height with the list scrolling inside keeps every row
+        // reachable — visible for short lists, scrollable for long ones.
         return Group {
             if groups.isEmpty {
                 Text(emptyMessage)
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 8)
-            } else if estimatedHeight > maxListHeight {
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            } else {
                 ScrollView {
                     listContent(groups, grouped: grouped)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(height: maxListHeight)
-            } else {
-                listContent(groups, grouped: grouped)
+                .frame(maxHeight: .infinity)
             }
         }
     }
