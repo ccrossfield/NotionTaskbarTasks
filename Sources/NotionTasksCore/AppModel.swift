@@ -142,6 +142,14 @@ public final class AppModel: ObservableObject {
         customQuery = query
     }
 
+    /// Whether what's on screen is over a minute old — the threshold for the
+    /// panel's stale-data warning. `reference` is injectable for checks; the
+    /// view passes its timeline date so the flag flips while the panel is open.
+    public func isStale(asOf reference: Date = Date()) -> Bool {
+        guard let lastRefreshed else { return false }
+        return reference.timeIntervalSince(lastRefreshed) > 60
+    }
+
     /// The label for the active view: the preset's title, or "Custom" (#6).
     public var activeTitle: String { isCustom ? "Custom" : preset.title }
 

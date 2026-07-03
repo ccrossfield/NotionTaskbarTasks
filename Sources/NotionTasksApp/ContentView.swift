@@ -12,7 +12,11 @@ struct ContentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            header
+            HStack {
+                header
+                Spacer()
+                staleBadge
+            }
 
             switch model.state {
             case .needsToken:
@@ -89,6 +93,19 @@ struct ContentView: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
+    }
+
+    /// A warning in the panel's top-right corner when the list is over a minute
+    /// old — typically a cached snapshot whose background refresh hasn't landed
+    /// (or failed). The timeline re-evaluates it while the panel stays open.
+    private var staleBadge: some View {
+        TimelineView(.periodic(from: .now, by: 10)) { context in
+            if model.isStale(asOf: context.date) {
+                Text("⚠️")
+                    .help("Last refreshed over a minute ago — this list may be out of date")
+                    .accessibilityLabel("Tasks may be out of date")
+            }
+        }
     }
 
     private var tokenEntry: some View {
@@ -372,14 +389,6 @@ struct ContentView: View {
         HStack {
             Button("Refresh") { Task { await model.refresh() } }
             Spacer()
-            // How old the list is — matters now that a cached snapshot can be
-            // on screen before the fetch lands. Live-updating relative text.
-            if let refreshed = model.lastRefreshed {
-                Text("Updated \(Text(refreshed, style: .relative)) ago")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Spacer()
-            }
             Button("Quit") { NSApplication.shared.terminate(nil) }
         }
         .font(.callout)

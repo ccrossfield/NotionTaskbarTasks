@@ -514,6 +514,27 @@ func appModelChecks(_ t: CheckRun) async {
         t.expect(cache.load() == nil, "the cached tasks should be gone with it")
     }
 
+    await t.test("the list counts as stale only when over a minute old") {
+        let store = InMemoryTokenStore()
+        let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)
+        let fetchTime = Date(timeIntervalSince1970: 1_751_600_000)
+        let model = AppModel(tokenStore: store, now: { fetchTime }) {
+            NotionClient(dataSourceID: ds, token: $0, http: stub)
+        }
+
+        // Nothing fetched yet: nothing to be stale about.
+        t.expect(!model.isStale(asOf: fetchTime), "no data yet should not read as stale")
+
+        await model.submit(token: "ntn_good")
+
+        t.expect(!model.isStale(asOf: fetchTime.addingTimeInterval(59)),
+                 "59s old is not over a minute")
+        t.expect(!model.isStale(asOf: fetchTime.addingTimeInterval(60)),
+                 "exactly a minute is not OVER a minute")
+        t.expect(model.isStale(asOf: fetchTime.addingTimeInterval(61)),
+                 "61s old is over a minute")
+    }
+
     await t.test("a failed write leaves the row unchanged and surfaces an error") {
         let store = InMemoryTokenStore()
         let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)
