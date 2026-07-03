@@ -549,8 +549,9 @@ struct ContentView: View {
 
     /// A priority group's header, and the control that folds it (#19): the
     /// whole row is one full-width plain button — no precision chevron target
-    /// in a 340px panel. The leading chevron carries the affordance; a
-    /// collapsed header says how many rows it is hiding. No animation: the
+    /// in a 340px panel. The leading chevron carries the affordance; the
+    /// count sits inline after the name in both states (#26), so nothing
+    /// moves on toggle except the chevron and the rows. No animation: the
     /// panel should feel instant.
     private func sectionHeader(_ group: TaskGroup) -> some View {
         let collapsed = model.isCollapsed(group.priority)
@@ -568,10 +569,8 @@ struct ContentView: View {
                 } else {
                     Text("No priority")
                 }
-                if collapsed {
-                    Text("(\(group.tasks.count))")
-                        .foregroundStyle(.secondary)
-                }
+                Text("(\(group.tasks.count))")
+                    .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
             }
             .font(.caption.weight(.semibold))
