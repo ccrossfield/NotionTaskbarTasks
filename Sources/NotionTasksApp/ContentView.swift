@@ -16,6 +16,7 @@ struct ContentView: View {
                 header
                 Spacer()
                 staleBadge
+                refreshButton
             }
 
             switch model.state {
@@ -105,6 +106,31 @@ struct ContentView: View {
                     .help("Last refreshed over a minute ago — this list may be out of date")
                     .accessibilityLabel("Tasks may be out of date")
             }
+        }
+    }
+
+    /// Manual refresh (#18): an icon button in the panel's top-right corner,
+    /// shown only with a list loaded — the failure view has its own "Try again"
+    /// and the token-entry screen has nothing to refresh. While a fetch is in
+    /// flight the button is disabled and a small spinner takes the icon's place;
+    /// the list itself stays visible behind it.
+    @ViewBuilder
+    private var refreshButton: some View {
+        if case .loaded = model.state {
+            Button {
+                Task { await model.refresh() }
+            } label: {
+                if model.isRefreshing {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(model.isRefreshing)
+            .help("Refresh")
+            .accessibilityLabel("Refresh")
         }
     }
 
@@ -385,13 +411,12 @@ struct ContentView: View {
         }
     }
 
+    /// Refresh moved to the header icon (#18); the in-flight spinner lives
+    /// there too, so the clock time stays put during a fetch. Quit stays here
+    /// until the NSStatusItem shell (#20) deletes the footer entirely.
     private var footer: some View {
         HStack(spacing: 8) {
-            Button("Refresh") { Task { await model.refresh() } }
-            if model.isRefreshing {
-                ProgressView()
-                    .controlSize(.small)
-            } else if let lastRefreshed = model.lastRefreshed {
+            if let lastRefreshed = model.lastRefreshed {
                 // When the data was last fetched (#7). An absolute clock time
                 // stays honest without ticking; the stale badge carries the
                 // "this is old" warning.
