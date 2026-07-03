@@ -413,6 +413,15 @@ struct ContentView: View {
 
     private var settingsMenu: some View {
         Menu {
+            Button {
+                model.setLaunchAtLogin(!model.launchAtLogin)
+            } label: {
+                if model.launchAtLogin {
+                    Label("Launch at login", systemImage: "checkmark")
+                } else {
+                    Text("Launch at login")
+                }
+            }
             Menu("Auto-refresh") {
                 ForEach(Self.refreshIntervals, id: \.seconds) { option in
                     Button {

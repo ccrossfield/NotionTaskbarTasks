@@ -31,6 +31,9 @@ public final class AppModel: ObservableObject {
     /// Seconds between automatic re-fetches (#7). Read from preferences at
     /// launch; changed via `setAutoRefreshInterval`.
     @Published public private(set) var autoRefreshInterval: TimeInterval
+    /// Whether the app starts at login (#10) — mirrors the system service's
+    /// state, which is the persisted source of truth.
+    @Published public private(set) var launchAtLogin: Bool
     /// The active preset. Published so switching it re-renders the list from the
     /// tasks already in hand — no re-fetch (#5). Defaults to Pivotal Priorities.
     @Published public private(set) var preset: Preset = .pivotalPriorities
@@ -45,6 +48,7 @@ public final class AppModel: ObservableObject {
     private let tokenStore: TokenStore
     private let cache: TaskCache?
     private let preferences: PreferencesStore?
+    private let loginItem: LoginItemService?
     private let makeClient: (String) -> NotionClient
     /// Injectable clock, so checks can pin the snapshot's `fetchedAt`.
     private let now: () -> Date
@@ -69,6 +73,7 @@ public final class AppModel: ObservableObject {
     public init(tokenStore: TokenStore,
                 cache: TaskCache? = nil,
                 preferences: PreferencesStore? = nil,
+                loginItem: LoginItemService? = nil,
                 now: @escaping () -> Date = Date.init,
                 pollSleep: @escaping @Sendable (TimeInterval) async -> Void = { seconds in
                     try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
@@ -77,9 +82,11 @@ public final class AppModel: ObservableObject {
         self.tokenStore = tokenStore
         self.cache = cache
         self.preferences = preferences
+        self.loginItem = loginItem
         self.now = now
         self.pollSleep = pollSleep
         self.makeClient = makeClient
+        self.launchAtLogin = loginItem?.isEnabled ?? false
         self.autoRefreshInterval =
             preferences?.autoRefreshInterval ?? Self.defaultAutoRefreshInterval
         // Reopen the way the app was left (#9) — restored here, before any
@@ -186,6 +193,28 @@ public final class AppModel: ObservableObject {
     public func stopPolling() {
         pollTask?.cancel()
         pollTask = nil
+    }
+
+    /// The menu-bar badge count (#10): open tasks due today or late, by the
+    /// same schema-derived semantics as the "Late or due today" preset —
+    /// independent of whichever view the panel is showing.
+    public func lateOrDueTodayCount(today: Date = Date(), calendar: Calendar = .current) -> Int {
+        guard case .loaded(let tasks) = state else { return 0 }
+        return TaskListEngine.lateOrDueToday(
+            tasks, openStatuses: openStatuses, today: today, calendar: calendar)
+            .reduce(0) { $0 + $1.tasks.count }
+    }
+
+    /// Register or unregister the app as a login item (#10). On failure the
+    /// published state re-reads the service, so the toggle stays truthful.
+    public func setLaunchAtLogin(_ enabled: Bool) {
+        guard let loginItem else { return }
+        do {
+            try loginItem.setEnabled(enabled)
+            launchAtLogin = enabled
+        } catch {
+            launchAtLogin = loginItem.isEnabled
+        }
     }
 
     /// Forget the stored token and return to the entry field. The cached tasks

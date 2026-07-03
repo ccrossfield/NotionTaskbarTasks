@@ -67,6 +67,18 @@ final class InMemoryPreferences: PreferencesStore {
     }
 }
 
+/// The login-item seam's test double. The app uses `SMAppService` behind
+/// `MainAppLoginItem`; this fake stands in for the system registry.
+final class FakeLoginItem: LoginItemService {
+    var isEnabled: Bool
+    var failWith: Error?
+    init(isEnabled: Bool = false) { self.isEnabled = isEnabled }
+    func setEnabled(_ enabled: Bool) throws {
+        if let failWith { throw failWith }
+        isEnabled = enabled
+    }
+}
+
 /// The poll-sleep seam's test double: each call parks until the check releases
 /// it with `tick()`, and records the interval it was asked to wait — so a check
 /// drives "the interval elapses" explicitly, with no real waiting.
@@ -620,6 +632,76 @@ func appModelChecks(_ t: CheckRun) async {
         let unchanged = try require(tasks.first { $0.id == firstTaskID })
         t.expect(unchanged.status == "In Progress", "status drifted to \(unchanged.status ?? "nil")")
         t.expect(model.writeError != nil, "a failed write should surface an error")
+    }
+
+    t.suite("AppModel menu bar niceties")
+
+    await t.test("the menu bar count is the open late-or-due-today tasks, whatever view is active") {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "Europe/London")!
+        let today = cal.date(from: DateComponents(year: 2026, month: 7, day: 15, hour: 12))!
+
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
+
+        t.expectEqual(model.lateOrDueTodayCount(today: today, calendar: cal), 0) // nothing loaded yet
+
+        await model.start()
+
+        // Of the five fixture tasks, exactly two are open with a due date on or
+        // before 2026-07-15: "Wire up…" (In Progress, due 28 Jun) and "Draft
+        // the Q3 board update" (To Do, due 2 Jul). Blocked-with-no-due, Done,
+        // and statusless tasks don't count.
+        t.expectEqual(model.lateOrDueTodayCount(today: today, calendar: cal), 2)
+
+        // The badge is about what needs attention, not about what's on screen.
+        model.selectPreset(.homePriorities)
+        t.expectEqual(model.lateOrDueTodayCount(today: today, calendar: cal), 2)
+    }
+
+    await t.test("toggling launch at login drives the service and mirrors its state") {
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)
+        let loginItem = FakeLoginItem()
+        let model = AppModel(tokenStore: store, loginItem: loginItem) {
+            NotionClient(dataSourceID: ds, token: $0, http: stub)
+        }
+        t.expect(!model.launchAtLogin, "starts reflecting the disabled service")
+
+        model.setLaunchAtLogin(true)
+        t.expect(loginItem.isEnabled, "the service should be registered")
+        t.expect(model.launchAtLogin, "the toggle should read as on")
+
+        model.setLaunchAtLogin(false)
+        t.expect(!loginItem.isEnabled, "the service should be unregistered")
+        t.expect(!model.launchAtLogin, "the toggle should read as off")
+    }
+
+    await t.test("an already-registered login item reads as enabled on launch") {
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)
+        let model = AppModel(tokenStore: store, loginItem: FakeLoginItem(isEnabled: true)) {
+            NotionClient(dataSourceID: ds, token: $0, http: stub)
+        }
+        t.expect(model.launchAtLogin, "the persisted system setting is the source of truth")
+    }
+
+    await t.test("a failed registration leaves the toggle truthful, not wishful") {
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)
+        let loginItem = FakeLoginItem()
+        loginItem.failWith = CheckError(description: "SMAppService says no")
+        let model = AppModel(tokenStore: store, loginItem: loginItem) {
+            NotionClient(dataSourceID: ds, token: $0, http: stub)
+        }
+
+        model.setLaunchAtLogin(true)
+
+        t.expect(!model.launchAtLogin, "the toggle must not claim a registration that failed")
+        t.expect(!loginItem.isEnabled, "the service is still disabled")
     }
 
     t.suite("AppModel remembered setup")
