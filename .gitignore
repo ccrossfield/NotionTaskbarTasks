@@ -1,11 +1,9 @@
-# Claude Code machine-local settings (per-user permissions and overrides)
-.claude/settings.local.json
-
-# Installed skills — third-party deps from mattpocock/skills.
-# Source of truth is skills-lock.json (committed); these dirs are generated
-# output. Restore on a fresh clone with: npx skills experimental_install
+# Claude Code machine-local state (settings, worktrees, installed skills).
+# Installed skills are third-party deps from mattpocock/skills; the committed
+# skills-lock.json is the source of truth. Restore on a fresh clone with:
+# npx skills experimental_install
+.claude/
 .agents/skills/
-.claude/skills/
 
 # Swift Package Manager build output + assembled app bundle
 .build/
