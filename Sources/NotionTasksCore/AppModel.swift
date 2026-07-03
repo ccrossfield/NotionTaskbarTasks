@@ -88,12 +88,17 @@ public final class AppModel: ObservableObject {
     /// updates only after the write succeeds, so a failed write causes no
     /// optimistic drift.
     public func setStatus(taskID: String, to newStatus: String) async {
-        guard case .loaded(let tasks) = state else { return }
+        guard case .loaded = state else { return }
         guard let token = tokenStore.read(), !token.isEmpty else { return }
         writeError = nil
         do {
             try await makeClient(token).updateStatus(pageID: taskID, to: newStatus)
-            let updated = tasks.map { task in
+            // Re-read the state as it is *now*: the await is a MainActor
+            // suspension point, so another write or a refresh may have landed
+            // meanwhile — mapping a pre-await snapshot back in would clobber
+            // their result (issue #12).
+            guard case .loaded(let current) = state else { return }
+            let updated = current.map { task in
                 task.id == taskID ? task.withStatus(newStatus) : task
             }
             state = .loaded(updated)

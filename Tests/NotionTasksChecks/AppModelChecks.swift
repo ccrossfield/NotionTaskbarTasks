@@ -58,6 +58,30 @@ actor GateHTTPClient: HTTPClient {
     }
 }
 
+/// Wraps another stub and holds only PATCH requests at a gate, letting reads
+/// straight through — so a check can land a full refresh (or a second write's
+/// read of the state) while a status write is still in flight.
+actor PatchGateHTTPClient: HTTPClient {
+    private let inner: HTTPClient
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(wrapping inner: HTTPClient) { self.inner = inner }
+
+    func open() {
+        isOpen = true
+        waiters.forEach { $0.resume() }
+        waiters.removeAll()
+    }
+
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        if request.httpMethod == "PATCH", !isOpen {
+            await withCheckedContinuation { waiters.append($0) }
+        }
+        return try await inner.data(for: request)
+    }
+}
+
 /// Routes the schema GET vs the query POST to different canned bodies, so a full
 /// `AppModel.load` (which fetches both) can be exercised through the seam.
 final class RoutingStubHTTPClient: HTTPClient {
@@ -550,5 +574,72 @@ func appModelChecks(_ t: CheckRun) async {
         let unchanged = try require(tasks.first { $0.id == firstTaskID })
         t.expect(unchanged.status == "In Progress", "status drifted to \(unchanged.status ?? "nil")")
         t.expect(model.writeError != nil, "a failed write should surface an error")
+    }
+
+    t.suite("AppModel write/refresh interleavings")
+
+    // tasks[1] in the fixture: "Draft the Q3 board update", To Do.
+    let secondTaskID = "11111111-0000-0000-0000-000000000002"
+
+    await t.test("two quick completes both stick - the first isn't undone by the second's landing") {
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let gate = PatchGateHTTPClient(wrapping: RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response")))
+        let model = AppModel(tokenStore: store) {
+            NotionClient(dataSourceID: ds, token: $0, http: gate)
+        }
+        await model.start()
+
+        // Tick task A, then task B before A's PATCH has returned: both writes
+        // are now in flight together, held at the gate.
+        let writeA = Task { await model.setStatus(taskID: firstTaskID, to: "Done") }
+        let writeB = Task { await model.setStatus(taskID: secondTaskID, to: "Done") }
+        for _ in 0..<50 { await Task.yield() } // let both reach the gate
+        await gate.open()
+        await writeA.value
+        await writeB.value
+
+        guard case .loaded(let tasks) = model.state else {
+            t.expect(false, "expected .loaded, got \(model.state)"); return
+        }
+        t.expect(tasks.first { $0.id == firstTaskID }?.status == "Done",
+                 "task A's completed status was clobbered by task B's write landing")
+        t.expect(tasks.first { $0.id == secondTaskID }?.status == "Done",
+                 "task B should show Done")
+    }
+
+    await t.test("a refresh that lands while a write is in flight is not overwritten by stale data") {
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let routing = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        let gate = PatchGateHTTPClient(wrapping: routing)
+        let model = AppModel(tokenStore: store) {
+            NotionClient(dataSourceID: ds, token: $0, http: gate)
+        }
+        await model.start()
+
+        // Hold a write at the gate, then let a full refresh land fresh data.
+        let write = Task { await model.setStatus(taskID: firstTaskID, to: "Done") }
+        for _ in 0..<50 { await Task.yield() } // let the write reach the gate
+        routing.query = freshQueryJSON
+        await model.refresh()
+        if case .loaded(let tasks) = model.state {
+            t.expectEqual(tasks.map(\.title), ["Fresh task"])
+        } else {
+            t.expect(false, "expected the refreshed list, got \(model.state)"); return
+        }
+
+        await gate.open()
+        await write.value
+
+        // The write's task isn't in the fresh list; its landing must not
+        // resurrect the five-task snapshot it captured before the refresh.
+        if case .loaded(let tasks) = model.state {
+            t.expectEqual(tasks.map(\.title), ["Fresh task"])
+        } else {
+            t.expect(false, "expected the refreshed list to survive, got \(model.state)")
+        }
     }
 }
