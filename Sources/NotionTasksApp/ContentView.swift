@@ -1,22 +1,12 @@
 import SwiftUI
 import NotionTasksCore
 
-/// Carries the task list's natural content height up to the view so the panel
-/// can size to it. A `ScrollView` reports a tiny ideal height, so without this
-/// the `MenuBarExtra` window collapses to less than one row.
-private struct ListHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
-
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel
     @State private var tokenField = ""
-    @State private var listHeight: CGFloat = 0
 
-    /// Cap the list before it scrolls, so the panel never fills the screen.
+    /// Cap the list height before it scrolls, so the panel never fills the
+    /// screen. Below this, the list is a plain self-sizing `VStack`.
     private let maxListHeight: CGFloat = 360
 
     var body: some View {
@@ -114,6 +104,14 @@ struct ContentView: View {
         let emptyMessage = model.isCustom
             ? "No tasks match this filter."
             : "Nothing in \(model.activeTitle) right now."
+        // A plain VStack sizes to its content correctly; a ScrollView reports a
+        // near-zero ideal height and would collapse the panel. So only wrap in a
+        // (capped) ScrollView once the content is tall enough to need scrolling;
+        // otherwise let the VStack size the panel. The estimate only picks the
+        // branch — it never sets the height — so it needn't be pixel-accurate.
+        let rowCount = groups.reduce(0) { $0 + $1.tasks.count }
+        let headerCount = grouped ? groups.count : 0
+        let estimatedHeight = CGFloat(rowCount) * 62 + CGFloat(headerCount) * 28
         return Group {
             if groups.isEmpty {
                 Text(emptyMessage)
@@ -121,43 +119,32 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 8)
-            } else {
+            } else if estimatedHeight > maxListHeight {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(groups, id: \.priority) { group in
-                            if grouped {
-                                sectionHeader(group.priority)
-                            }
-                            ForEach(group.tasks) { task in
-                                row(for: task, showPriority: !grouped)
-                                    .padding(.vertical, 6)
-                                Divider()
-                            }
-                        }
-                    }
-                    .background(GeometryReader { geo in
-                        Color.clear.preference(key: ListHeightKey.self, value: geo.size.height)
-                    })
-                    // Force a fresh measurement whenever the visible rows change.
-                    // A flat (custom) result is always one group with priority nil,
-                    // so its identity never changes across filters; without this the
-                    // GeometryReader keeps a stale height and the panel mis-sizes.
-                    .id(listSignature(groups))
+                    listContent(groups, grouped: grouped)
                 }
-                .frame(height: min(listHeight, maxListHeight))
-                .onPreferenceChange(ListHeightKey.self) { listHeight = $0 }
+                .frame(height: maxListHeight)
+            } else {
+                listContent(groups, grouped: grouped)
             }
         }
     }
 
-    /// A signature of exactly what the list is showing — group priorities plus
-    /// each group's task ids in order. Used as the measured subtree's `.id` so a
-    /// filter or sort change (which reorders or swaps rows) forces a re-measure,
-    /// and a reorder-only change is caught too (ids in order).
-    private func listSignature(_ groups: [TaskGroup]) -> String {
-        groups
-            .map { ($0.priority?.rawValue ?? "flat") + ":" + $0.tasks.map(\.id).joined(separator: ",") }
-            .joined(separator: "|")
+    /// The rows themselves, shared by the scrolling and non-scrolling branches.
+    @ViewBuilder
+    private func listContent(_ groups: [TaskGroup], grouped: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(groups, id: \.priority) { group in
+                if grouped {
+                    sectionHeader(group.priority)
+                }
+                ForEach(group.tasks) { task in
+                    row(for: task, showPriority: !grouped)
+                        .padding(.vertical, 6)
+                    Divider()
+                }
+            }
+        }
     }
 
     /// The custom view's controls (#6): one "Filter" menu (with a submenu per
