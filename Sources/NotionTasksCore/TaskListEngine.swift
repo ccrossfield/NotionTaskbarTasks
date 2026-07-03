@@ -1,12 +1,13 @@
 import Foundation
 
 /// A run of tasks sharing a priority, ready to render under one section header.
-/// `priority == nil` is the trailing "no priority" group.
+/// `priority` is the option name as Notion returns it ("P0", "P3", …);
+/// `nil` is the trailing "no priority" group.
 public struct TaskGroup: Equatable {
-    public let priority: Priority?
+    public let priority: String?
     public let tasks: [NotionTask]
 
-    public init(priority: Priority?, tasks: [NotionTask]) {
+    public init(priority: String?, tasks: [NotionTask]) {
         self.priority = priority
         self.tasks = tasks
     }
@@ -19,24 +20,27 @@ public struct TaskGroup: Equatable {
 public enum TaskListEngine {
     /// The grouped-and-ordered task list for a given preset (#5). The one entry
     /// point the app calls; it dispatches to the per-preset function below.
-    /// `workCategory`/`personalCategories`/`today` are used only by the presets
-    /// that need them.
+    /// `workCategory`/`personalCategories`/`priorityOrder`/`today` are used only
+    /// by the presets that need them.
     public static func groups(
         for preset: Preset,
         _ tasks: [NotionTask],
         openStatuses: Set<String>,
         workCategory: String,
         personalCategories: Set<String>,
+        priorityOrder: [String],
         today: Date,
         calendar: Calendar = .current
     ) -> [TaskGroup] {
         switch preset {
         case .pivotalPriorities:
             return pivotalPriorities(tasks, openStatuses: openStatuses,
-                                     workCategory: workCategory, today: today, calendar: calendar)
+                                     workCategory: workCategory, priorityOrder: priorityOrder,
+                                     today: today, calendar: calendar)
         case .homePriorities:
             return homePriorities(tasks, openStatuses: openStatuses,
-                                  personalCategories: personalCategories, today: today, calendar: calendar)
+                                  personalCategories: personalCategories,
+                                  priorityOrder: priorityOrder, today: today, calendar: calendar)
         case .lateOrDueToday:
             return lateOrDueToday(tasks, openStatuses: openStatuses, today: today, calendar: calendar)
         case .allOpen:
@@ -45,33 +49,39 @@ public enum TaskListEngine {
     }
 
     /// The Pivotal Priorities view (#4, the launch default): open, Work-category
-    /// tasks whose Start from is today-or-earlier or unset, grouped P0 → P1 → P2
-    /// → no-priority, each sorted by Due date ascending (no due date last), with
-    /// the title as a stable tie-breaker.
+    /// tasks whose Start from is today-or-earlier or unset, grouped by priority
+    /// in the schema's option order (`priorityOrder`) with no-priority last,
+    /// each group sorted by Due date ascending (no due date last), with the
+    /// title as a stable tie-breaker.
     public static func pivotalPriorities(
         _ tasks: [NotionTask],
         openStatuses: Set<String>,
         workCategory: String,
+        priorityOrder: [String],
         today: Date,
         calendar: Calendar = .current
     ) -> [TaskGroup] {
-        groupedByPriority(tasks, openStatuses: openStatuses, today: today, calendar: calendar) {
+        groupedByPriority(tasks, openStatuses: openStatuses, priorityOrder: priorityOrder,
+                          today: today, calendar: calendar) {
             $0 == workCategory
         }
     }
 
     /// Home priorities (#5): the personal-category mirror of Pivotal Priorities.
     /// Open tasks in any *personal* category (every category except Work), same
-    /// Start-from deferral, grouped P0 → P1 → P2 → no-priority. An uncategorised
-    /// task is excluded — "personal-category" means it carries a personal one.
+    /// Start-from deferral, same schema-ordered priority grouping. An
+    /// uncategorised task is excluded — "personal-category" means it carries a
+    /// personal one.
     public static func homePriorities(
         _ tasks: [NotionTask],
         openStatuses: Set<String>,
         personalCategories: Set<String>,
+        priorityOrder: [String],
         today: Date,
         calendar: Calendar = .current
     ) -> [TaskGroup] {
-        groupedByPriority(tasks, openStatuses: openStatuses, today: today, calendar: calendar) { category in
+        groupedByPriority(tasks, openStatuses: openStatuses, priorityOrder: priorityOrder,
+                          today: today, calendar: calendar) { category in
             guard let category else { return false }
             return personalCategories.contains(category)
         }
@@ -110,11 +120,13 @@ public enum TaskListEngine {
 
     /// A custom, user-composed view (#6): the tasks matching every active filter
     /// (filters combine with AND; an empty option set means "any"), as a single
-    /// flat group sorted by the chosen field and direction. Missing sort values
-    /// sort last in both directions; the title is the stable final tie-break.
+    /// flat group sorted by the chosen field and direction. `priorityOrder` (the
+    /// schema's option order) ranks the priority sort. Missing sort values sort
+    /// last in both directions; the title is the stable final tie-break.
     public static func custom(
         _ tasks: [NotionTask],
         query: CustomQuery,
+        priorityOrder: [String],
         today: Date,
         calendar: Calendar = .current
     ) -> [TaskGroup] {
@@ -122,12 +134,13 @@ public enum TaskListEngine {
         let filtered = tasks.filter { task in
             matches(query.statuses, task.status)
                 && matches(query.categories, task.category)
-                && matches(query.priorities, task.priority?.rawValue)
+                && matches(query.priorities, task.priority)
                 && matches(query.workTypes, task.workType)
                 && matches(query.dueDate, task.dueDate, startOfToday, calendar)
                 && matches(query.startFrom, task.startFrom, startOfToday, calendar)
         }
-        return flatGroup(filtered.sorted(by: comparator(for: query)))
+        let rank = priorityRank(filtered, order: priorityOrder)
+        return flatGroup(filtered.sorted(by: comparator(for: query, priorityRank: rank)))
     }
 
     /// A select filter matches when it's empty ("any") or the task's value is in
@@ -155,9 +168,27 @@ public enum TaskListEngine {
         }
     }
 
+    /// The sort rank per priority name: schema position for known names (first
+    /// most urgent); a name the schema doesn't list ranks after every known one,
+    /// alphabetically among the unknowns present. A missing priority has no rank
+    /// and sorts last via the comparator's nil handling.
+    private static func priorityRank(_ tasks: [NotionTask], order: [String]) -> [String: Int] {
+        var rank: [String: Int] = [:]
+        for (index, name) in order.enumerated() where rank[name] == nil {
+            rank[name] = index
+        }
+        let unknown = Set(tasks.compactMap(\.priority)).subtracting(order).sorted()
+        for (offset, name) in unknown.enumerated() {
+            rank[name] = order.count + offset
+        }
+        return rank
+    }
+
     /// The comparator for a custom sort: orders by the chosen field/direction,
     /// missing values last (both directions), title as the stable tie-break.
-    private static func comparator(for query: CustomQuery) -> (NotionTask, NotionTask) -> Bool {
+    private static func comparator(
+        for query: CustomQuery, priorityRank: [String: Int]
+    ) -> (NotionTask, NotionTask) -> Bool {
         let ascending = query.ascending
         func ordered<T: Comparable>(_ a: T?, _ b: T?) -> Bool? {
             switch (a, b) {
@@ -171,7 +202,8 @@ public enum TaskListEngine {
             let decided: Bool?
             switch query.sortField {
             case .dueDate: decided = ordered(a.dueDate, b.dueDate)
-            case .priority: decided = ordered(a.priority?.rank, b.priority?.rank)
+            case .priority: decided = ordered(a.priority.flatMap { priorityRank[$0] },
+                                              b.priority.flatMap { priorityRank[$0] })
             case .created: decided = ordered(a.createdTime, b.createdTime)
             case .lastEdited: decided = ordered(a.lastEditedTime, b.lastEditedTime)
             }
@@ -182,11 +214,13 @@ public enum TaskListEngine {
     // MARK: - Shared building blocks
 
     /// The open + category + Start-from filter that Pivotal and Home share,
-    /// grouped P0 → P1 → P2 → no-priority with each group Due-sorted. The only
-    /// difference between the two presets is `categoryMatches`.
+    /// grouped by priority in schema order with no-priority last, each group
+    /// Due-sorted. The only difference between the two presets is
+    /// `categoryMatches`.
     private static func groupedByPriority(
         _ tasks: [NotionTask],
         openStatuses: Set<String>,
+        priorityOrder: [String],
         today: Date,
         calendar: Calendar,
         categoryMatches: (String?) -> Bool
@@ -201,7 +235,11 @@ public enum TaskListEngine {
             return true
         }
 
-        let order: [Priority?] = [.p0, .p1, .p2, nil]
+        // A task can carry a priority the schema facts don't list (stale
+        // schema, fallback). Those group after every schema-known option,
+        // alphabetically among themselves, before the no-priority group.
+        let unknown = Set(visible.compactMap(\.priority)).subtracting(priorityOrder).sorted()
+        let order: [String?] = priorityOrder + unknown + [nil]
         return order.compactMap { priority in
             let group = visible
                 .filter { $0.priority == priority }

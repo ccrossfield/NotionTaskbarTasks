@@ -324,7 +324,7 @@ struct ContentView: View {
                     Circle()
                         .fill(colour(for: priority))
                         .frame(width: 7, height: 7)
-                    Text(priority.rawValue)
+                    Text(priority)
                 } else {
                     Text("No priority")
                 }
@@ -387,7 +387,7 @@ struct ContentView: View {
                     Circle()
                         .fill(colour(for: priority))
                         .frame(width: 7, height: 7)
-                    Text(priority.rawValue)
+                    Text(priority)
                     if !textSegments.isEmpty { Text("·") }
                 }
                 if !textSegments.isEmpty {
@@ -400,11 +400,14 @@ struct ContentView: View {
     }
 
     /// The only colour in the list: P0 red, P1 amber, P2 green (ADR-0002).
-    private func colour(for priority: Priority) -> Color {
+    /// A priority name beyond those three gets a neutral dot — the schema can
+    /// grow options the app has never heard of (#15).
+    private func colour(for priority: String) -> Color {
         switch priority {
-        case .p0: return .red
-        case .p1: return .orange
-        case .p2: return .green
+        case "P0": return .red
+        case "P1": return .orange
+        case "P2": return .green
+        default: return .gray
         }
     }
 

@@ -20,7 +20,7 @@ public struct SchemaOptions: Equatable, Codable {
     public static let fallback = SchemaOptions(
         statuses: NotionConfig.selectableStatuses,
         categories: [NotionConfig.fallbackWorkCategory] + NotionConfig.fallbackPersonalCategories.sorted(),
-        priorities: Priority.allCases.map(\.rawValue),
+        priorities: ["P0", "P1", "P2"],
         workTypes: ["Strategy", "Reporting/Comms", "Team", "HORIZON", "PODIUM", "PI", "PISTON", "PIVOT", "Admin"])
 }
 

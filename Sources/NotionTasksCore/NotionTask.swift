@@ -1,22 +1,5 @@
 import Foundation
 
-/// A task's priority. Backed by the Notion select-option names "P0"/"P1"/"P2".
-/// `rank` gives the sort order the priority views need later (#4/#5): P0 first.
-public enum Priority: String, Equatable, CaseIterable, Codable {
-    case p0 = "P0"
-    case p1 = "P1"
-    case p2 = "P2"
-
-    /// Lower is more urgent, so this sorts P0 before P1 before P2.
-    public var rank: Int {
-        switch self {
-        case .p0: return 0
-        case .p1: return 1
-        case .p2: return 2
-        }
-    }
-}
-
 /// A task as the app displays it. Named `NotionTask` deliberately — `Task`
 /// collides with Swift concurrency's `Task`.
 ///
@@ -27,7 +10,10 @@ public struct NotionTask: Identifiable, Equatable, Codable {
     public let title: String
     /// The Status option name (e.g. "To Do", "Blocked"), or `nil` if unset.
     public let status: String?
-    public let priority: Priority?
+    /// The Priority select-option name exactly as Notion returns it (e.g.
+    /// "P0", "P3"), or `nil` if unset. Any option name is carried; ordering
+    /// and grouping come from the schema's option order, not a closed set (#15).
+    public let priority: String?
     public let dueDate: Date?
     /// The Category select-option name (carries its emoji, e.g. "👨🏻‍💻 Work").
     public let category: String?
@@ -47,7 +33,7 @@ public struct NotionTask: Identifiable, Equatable, Codable {
         id: String,
         title: String,
         status: String?,
-        priority: Priority? = nil,
+        priority: String? = nil,
         dueDate: Date? = nil,
         category: String? = nil,
         startFrom: Date? = nil,

@@ -254,22 +254,24 @@ public final class AppModel: ObservableObject {
     }
 
     /// Whether a priority group's rows are folded away in the active preset
-    /// (#19). `nil` is the "No priority" group.
-    public func isCollapsed(_ priority: Priority?) -> Bool {
+    /// (#19). `priority` is the group's option name; `nil` is the "No priority"
+    /// group.
+    public func isCollapsed(_ priority: String?) -> Bool {
         collapsedGroups.contains(groupKey(priority))
     }
 
     /// Fold or unfold a priority group's rows in the active preset (#19).
     /// Remembered at once, like every other view change (#9).
-    public func toggleCollapsed(_ priority: Priority?) {
+    public func toggleCollapsed(_ priority: String?) {
         collapsedGroups.formSymmetricDifference([groupKey(priority)])
         preferences?.collapsedGroups = collapsedGroups
     }
 
     /// Keyed by preset as well as priority, so folding P2 in Pivotal leaves
-    /// Home's P2 alone.
-    private func groupKey(_ priority: Priority?) -> String {
-        "\(preset.rawValue)|\(priority?.rawValue ?? "none")"
+    /// Home's P2 alone. Keys carry the option name, so the ones stored while
+    /// priorities were an enum ("pivotalPriorities|P0") keep their meaning.
+    private func groupKey(_ priority: String?) -> String {
+        "\(preset.rawValue)|\(priority ?? "none")"
     }
 
     /// Every view change is remembered at once (#9); there is no "save" moment
@@ -300,11 +302,14 @@ public final class AppModel: ObservableObject {
     public func groups(today: Date = Date(), calendar: Calendar = .current) -> [TaskGroup] {
         guard case .loaded(let tasks) = state else { return [] }
         if isCustom {
-            return TaskListEngine.custom(tasks, query: customQuery, today: today, calendar: calendar)
+            return TaskListEngine.custom(tasks, query: customQuery,
+                                         priorityOrder: schemaOptions.priorities,
+                                         today: today, calendar: calendar)
         }
         return TaskListEngine.groups(
             for: preset, tasks, openStatuses: openStatuses, workCategory: workCategory,
-            personalCategories: personalCategories, today: today, calendar: calendar)
+            personalCategories: personalCategories, priorityOrder: schemaOptions.priorities,
+            today: today, calendar: calendar)
     }
 
     /// Show a snapshot: the tasks AND the schema facts they were filtered with,

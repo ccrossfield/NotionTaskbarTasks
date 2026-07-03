@@ -36,11 +36,34 @@ func decodingChecks(_ t: CheckRun) async {
     await t.test("priority decodes to P0/P1/P2, or nil when unset") {
         let tasks = try JSONDecoder().decode(
             NotionQueryResponse.self, from: try fixtureData("query_response")).tasks
-        t.expect(tasks[0].priority == .p1, "tasks[0].priority was \(String(describing: tasks[0].priority))")
-        t.expect(tasks[1].priority == .p0, "tasks[1].priority was \(String(describing: tasks[1].priority))")
-        t.expect(tasks[2].priority == .p2, "tasks[2].priority was \(String(describing: tasks[2].priority))")
+        t.expect(tasks[0].priority == "P1", "tasks[0].priority was \(String(describing: tasks[0].priority))")
+        t.expect(tasks[1].priority == "P0", "tasks[1].priority was \(String(describing: tasks[1].priority))")
+        t.expect(tasks[2].priority == "P2", "tasks[2].priority was \(String(describing: tasks[2].priority))")
         t.expect(tasks[3].priority == nil, "tasks[3].priority (select null) should be nil")
         t.expect(tasks[4].priority == nil, "tasks[4].priority (unset) should be nil")
+    }
+
+    await t.test("a priority option outside P0/P1/P2 decodes carrying its raw name (#15)") {
+        // Same shape as the fixture, but with a Priority option our code never
+        // names. The raw name must survive decoding — the schema, not a closed
+        // enum, is the source of truth for priorities.
+        let json = """
+        {
+          "object": "list",
+          "results": [{
+            "id": "p3-task",
+            "properties": {
+              "Task": { "type": "title", "title": [{ "plain_text": "A P3 task" }] },
+              "Priority": { "id": "prio", "type": "select",
+                            "select": { "id": "opt-p3", "name": "P3", "color": "purple" } }
+            }
+          }],
+          "has_more": false,
+          "next_cursor": null
+        }
+        """
+        let tasks = try JSONDecoder().decode(NotionQueryResponse.self, from: Data(json.utf8)).tasks
+        t.expectEqual(tasks.first?.priority, "P3")
     }
 
     await t.test("category decodes to the select name, or nil when unset") {

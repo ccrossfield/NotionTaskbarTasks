@@ -251,7 +251,7 @@ func appModelChecks(_ t: CheckRun) async {
         let done = try require(tasks.first { $0.id == todoID })
         t.expect(done.status == "Done", "status was \(done.status ?? "nil")")
         // The status change must not wipe the row's other fields.
-        t.expect(done.priority == .p0, "priority drifted to \(String(describing: done.priority))")
+        t.expect(done.priority == "P0", "priority drifted to \(String(describing: done.priority))")
         t.expect(done.category == "👨🏻‍💻 Work", "category drifted to \(done.category ?? "nil")")
         t.expect(done.dueDate != nil, "due date was dropped on status change")
     }
@@ -274,7 +274,7 @@ func appModelChecks(_ t: CheckRun) async {
         // surfaced by this date). "Draft the Q3 board update" is P0, "Wire up the
         // menu bar read path" is P1. The Blocked/Done/untitled ones are excluded
         // by category or by the schema-derived open set (Done is not open).
-        t.expectEqual(groups.map(\.priority), [.p0, .p1])
+        t.expectEqual(groups.map(\.priority), ["P0", "P1"])
         t.expectEqual(groups.first?.tasks.map(\.title), ["Draft the Q3 board update"])
         t.expect(groups.count == 2 && groups[1].tasks.map(\.title) == ["Wire up the menu bar read path"],
                  "P1 group should hold the one open Work P1 task")
@@ -294,7 +294,7 @@ func appModelChecks(_ t: CheckRun) async {
 
         // Default preset is Pivotal Priorities: the two open Work tasks, P0/P1.
         t.expectEqual(model.preset, .pivotalPriorities)
-        t.expectEqual(model.groups(today: today, calendar: cal).map(\.priority), [.p0, .p1])
+        t.expectEqual(model.groups(today: today, calendar: cal).map(\.priority), ["P0", "P1"])
 
         // All open brings back the personal Blocked task Pivotal filtered out, as
         // a single flat group in Created-descending order — no re-fetch involved.
@@ -309,7 +309,7 @@ func appModelChecks(_ t: CheckRun) async {
         // Home priorities: the personal-category task, grouped by priority.
         model.selectPreset(.homePriorities)
         let home = model.groups(today: today, calendar: cal)
-        t.expectEqual(home.map(\.priority), [.p2])
+        t.expectEqual(home.map(\.priority), ["P2"])
         t.expectEqual(home.first?.tasks.map(\.title), ["Chase vendor on renewal quote"])
     }
 
@@ -353,7 +353,7 @@ func appModelChecks(_ t: CheckRun) async {
         // Selecting a preset leaves custom mode and restores the preset grouping.
         model.selectPreset(.pivotalPriorities)
         t.expect(!model.isCustom, "picking a preset should leave the custom view")
-        t.expectEqual(model.groups(today: today, calendar: cal).map(\.priority), [.p0, .p1])
+        t.expectEqual(model.groups(today: today, calendar: cal).map(\.priority), ["P0", "P1"])
     }
 
     t.suite("AppModel caching and background refresh")
@@ -393,7 +393,7 @@ func appModelChecks(_ t: CheckRun) async {
         // not in the schema fixture. If the model filtered with fallback facts,
         // this task would vanish from Home priorities until the fetch landed.
         let labTask = NotionTask(id: "lab1", title: "Calibrate the spectrometer",
-                                 status: "To Do", priority: .p2, category: "🧪 Lab")
+                                 status: "To Do", priority: "P2", category: "🧪 Lab")
         let snapshot = CachedSnapshot(
             tasks: [labTask],
             openStatuses: ["To Do"],
@@ -422,6 +422,45 @@ func appModelChecks(_ t: CheckRun) async {
         // open set, and the custom filter lists must come from the snapshot too.
         t.expectEqual(model.groups().flatMap(\.tasks).map(\.id), ["lab1"])
         t.expectEqual(model.schemaOptions.categories, ["🧪 Lab"])
+
+        await gate.open()
+        await launch.value
+    }
+
+    await t.test("grouped presets order priority sections by the snapshot's schema facts, not the fallback (#15)") {
+        // Priorities that exist only in the snapshot's schema facts, in an order
+        // alphabetical sorting would get wrong. If the model grouped with the
+        // compile-time fallback (P0/P1/P2), the unknown-name rule would render
+        // Alpha before Zed; the snapshot's schema order says Zed first.
+        let work = "👨🏻‍💻 Work"
+        let snapshot = CachedSnapshot(
+            tasks: [
+                NotionTask(id: "a1", title: "Alpha task", status: "To Do",
+                           priority: "Alpha", category: work),
+                NotionTask(id: "z1", title: "Zed task", status: "To Do",
+                           priority: "Zed", category: work),
+            ],
+            openStatuses: ["To Do"],
+            workCategory: work,
+            personalCategories: ["📝 Life admin"],
+            schemaOptions: SchemaOptions(statuses: ["To Do"], categories: [work],
+                                         priorities: ["Zed", "Alpha"], workTypes: []),
+            fetchedAt: Date(timeIntervalSince1970: 1_751_500_000))
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let cache = InMemoryTaskCache(seed: snapshot)
+        let gate = GateHTTPClient(wrapping: RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response")))
+        let model = AppModel(tokenStore: store, cache: cache) {
+            NotionClient(dataSourceID: ds, token: $0, http: gate)
+        }
+
+        let launch = Task { await model.start() }
+        var spins = 0
+        while model.state != .loaded(snapshot.tasks), spins < 500 {
+            await Task.yield(); spins += 1
+        }
+        t.expectEqual(model.groups().map(\.priority), ["Zed", "Alpha"])
 
         await gate.open()
         await launch.value
@@ -1037,16 +1076,16 @@ func appModelChecks(_ t: CheckRun) async {
         let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)
         let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
 
-        t.expect(!model.isCollapsed(.p0), "everything starts expanded on first run")
+        t.expect(!model.isCollapsed("P0"), "everything starts expanded on first run")
         t.expect(!model.isCollapsed(nil), "the no-priority group starts expanded too")
 
-        model.toggleCollapsed(.p0)
-        t.expect(model.isCollapsed(.p0), "toggling a header collapses that group")
-        t.expect(!model.isCollapsed(.p1), "other groups are untouched")
+        model.toggleCollapsed("P0")
+        t.expect(model.isCollapsed("P0"), "toggling a header collapses that group")
+        t.expect(!model.isCollapsed("P1"), "other groups are untouched")
         t.expect(!model.isCollapsed(nil), "the no-priority group is untouched")
 
-        model.toggleCollapsed(.p0)
-        t.expect(!model.isCollapsed(.p0), "toggling again re-expands the group")
+        model.toggleCollapsed("P0")
+        t.expect(!model.isCollapsed("P0"), "toggling again re-expands the group")
     }
 
     await t.test("collapse is per preset: P2 folded in Pivotal leaves Home's P2 expanded") {
@@ -1055,14 +1094,14 @@ func appModelChecks(_ t: CheckRun) async {
         let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
 
         // Active preset is the Pivotal default.
-        model.toggleCollapsed(.p2)
-        t.expect(model.isCollapsed(.p2), "Pivotal's P2 collapses")
+        model.toggleCollapsed("P2")
+        t.expect(model.isCollapsed("P2"), "Pivotal's P2 collapses")
 
         model.selectPreset(.homePriorities)
-        t.expect(!model.isCollapsed(.p2), "Home's P2 keeps its own, expanded state")
+        t.expect(!model.isCollapsed("P2"), "Home's P2 keeps its own, expanded state")
 
         model.selectPreset(.pivotalPriorities)
-        t.expect(model.isCollapsed(.p2), "Pivotal's P2 is still collapsed on return")
+        t.expect(model.isCollapsed("P2"), "Pivotal's P2 is still collapsed on return")
     }
 
     await t.test("collapse state survives a relaunch, still independently per preset") {
@@ -1072,18 +1111,18 @@ func appModelChecks(_ t: CheckRun) async {
         let firstLaunch = AppModel(tokenStore: store, preferences: prefs) {
             NotionClient(dataSourceID: ds, token: $0, http: stub)
         }
-        firstLaunch.toggleCollapsed(.p2) // in the Pivotal default
+        firstLaunch.toggleCollapsed("P2") // in the Pivotal default
         firstLaunch.toggleCollapsed(nil)
 
         // The next launch reads the same preferences.
         let relaunch = AppModel(tokenStore: store, preferences: prefs) {
             NotionClient(dataSourceID: ds, token: $0, http: stub)
         }
-        t.expect(relaunch.isCollapsed(.p2), "Pivotal's folded P2 is remembered")
+        t.expect(relaunch.isCollapsed("P2"), "Pivotal's folded P2 is remembered")
         t.expect(relaunch.isCollapsed(nil), "the folded no-priority group is remembered")
-        t.expect(!relaunch.isCollapsed(.p0), "P0 was never folded")
+        t.expect(!relaunch.isCollapsed("P0"), "P0 was never folded")
         relaunch.selectPreset(.homePriorities)
-        t.expect(!relaunch.isCollapsed(.p2), "Home's P2 is still expanded")
+        t.expect(!relaunch.isCollapsed("P2"), "Home's P2 is still expanded")
     }
 
     await t.test("a refresh that lands while a write is in flight is not overwritten by stale data") {

@@ -48,7 +48,7 @@ public struct NotionQueryResponse: Decodable {
                 id: id,
                 title: title.isEmpty ? "(untitled)" : title,
                 status: statusProperty?.status?.name,
-                priority: (properties["Priority"]?.select?.name).flatMap(Priority.init(rawValue:)),
+                priority: properties["Priority"]?.select?.name,
                 dueDate: NotionQueryResponse.date(from: properties["Due Date"]?.date?.start),
                 category: properties["Category"]?.select?.name,
                 startFrom: NotionQueryResponse.date(from: properties["Start from"]?.date?.start),

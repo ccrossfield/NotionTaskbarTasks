@@ -6,7 +6,7 @@ import NotionTasksCore
 func sampleSnapshot() -> CachedSnapshot {
     CachedSnapshot(
         tasks: [
-            NotionTask(id: "c1", title: "Cached task", status: "To Do", priority: .p1,
+            NotionTask(id: "c1", title: "Cached task", status: "To Do", priority: "P1",
                        dueDate: Date(timeIntervalSince1970: 1_800_000_000),
                        category: "📝 Life admin",
                        startFrom: Date(timeIntervalSince1970: 1_750_000_000),

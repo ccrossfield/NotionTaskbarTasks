@@ -23,29 +23,30 @@ func taskListEngineChecks(_ t: CheckRun) async {
     // A deliberately mixed set: some included, some excluded for each reason.
     let tasks = [
         NotionTask(id: "a", title: "P0 work due today", status: "To Do",
-                   priority: .p0, dueDate: today, category: work),
+                   priority: "P0", dueDate: today, category: work),
         NotionTask(id: "b", title: "P1 work overdue", status: "In Progress",
-                   priority: .p1, dueDate: past, category: work),
+                   priority: "P1", dueDate: past, category: work),
         NotionTask(id: "c", title: "P0 work no due", status: "Blocked",
-                   priority: .p0, dueDate: nil, category: work),
+                   priority: "P0", dueDate: nil, category: work),
         NotionTask(id: "h", title: "P2 work starts today", status: "To Do",
-                   priority: .p2, dueDate: nil, category: work, startFrom: today),
+                   priority: "P2", dueDate: nil, category: work, startFrom: today),
         NotionTask(id: "g", title: "work no priority", status: "To Do",
                    priority: nil, dueDate: today, category: work),
         // Excluded:
         NotionTask(id: "done", title: "done work", status: "Done",
-                   priority: .p0, dueDate: today, category: work),               // not open
+                   priority: "P0", dueDate: today, category: work),               // not open
         NotionTask(id: "home", title: "home P0", status: "To Do",
-                   priority: .p0, dueDate: today, category: "📝 Life admin"),     // not Work
+                   priority: "P0", dueDate: today, category: "📝 Life admin"),     // not Work
         NotionTask(id: "defer", title: "deferred work", status: "To Do",
-                   priority: .p1, dueDate: today, category: work, startFrom: future), // not surfaced yet
+                   priority: "P1", dueDate: today, category: work, startFrom: future), // not surfaced yet
     ]
 
     let groups = TaskListEngine.pivotalPriorities(
-        tasks, openStatuses: openStatuses, workCategory: work, today: today, calendar: cal)
+        tasks, openStatuses: openStatuses, workCategory: work,
+        priorityOrder: ["P0", "P1", "P2"], today: today, calendar: cal)
 
     await t.test("groups appear in P0, P1, P2, then no-priority order, empties omitted") {
-        t.expectEqual(groups.map(\.priority), [.p0, .p1, .p2, nil])
+        t.expectEqual(groups.map(\.priority), ["P0", "P1", "P2", nil])
     }
 
     await t.test("within a group, due-date ascending with no-due last") {
@@ -72,20 +73,63 @@ func taskListEngineChecks(_ t: CheckRun) async {
         t.expect(shown.contains("h"), "Start from == today should be visible")
     }
 
+    // ---- Schema-ordered priorities (#15): the schema, not a closed set, orders the groups ----
+    t.suite("TaskListEngine — schema-ordered priority groups")
+    do {
+        let p3Tasks = [
+            NotionTask(id: "none", title: "no priority", status: "To Do",
+                       priority: nil, category: work),
+            NotionTask(id: "p3", title: "P3 work task", status: "To Do",
+                       priority: "P3", category: work),
+            NotionTask(id: "p0", title: "P0 work task", status: "To Do",
+                       priority: "P0", category: work),
+        ]
+        let groups = TaskListEngine.pivotalPriorities(
+            p3Tasks, openStatuses: openStatuses, workCategory: work,
+            priorityOrder: ["P0", "P1", "P2", "P3"], today: today, calendar: cal)
+
+        await t.test("a schema option beyond P2 groups under its own header, in schema position") {
+            t.expectEqual(groups.map(\.priority), ["P0", "P3", nil])
+        }
+
+        await t.test("the new option's tasks are in its group, not filed under No priority") {
+            t.expectEqual(groups.first { $0.priority == "P3" }?.tasks.map(\.id), ["p3"])
+            t.expectEqual(groups.first { $0.priority == nil }?.tasks.map(\.id), ["none"])
+        }
+
+        await t.test("priorities absent from the schema group after known ones, alphabetically, before No priority") {
+            // A stale schema (or the fallback) can lag behind what tasks carry.
+            let staleTasks = [
+                NotionTask(id: "z", title: "zeta task", status: "To Do",
+                           priority: "Zeta", category: work),
+                NotionTask(id: "a", title: "alpha task", status: "To Do",
+                           priority: "Alpha", category: work),
+                NotionTask(id: "p1", title: "known task", status: "To Do",
+                           priority: "P1", category: work),
+                NotionTask(id: "none", title: "no priority", status: "To Do",
+                           priority: nil, category: work),
+            ]
+            let stale = TaskListEngine.pivotalPriorities(
+                staleTasks, openStatuses: openStatuses, workCategory: work,
+                priorityOrder: ["P0", "P1", "P2"], today: today, calendar: cal)
+            t.expectEqual(stale.map(\.priority), ["P1", "Alpha", "Zeta", nil])
+        }
+    }
+
     // ---- Late or due today (#5): flat, open, Due ≤ today, Due asc then Created asc ----
     t.suite("TaskListEngine — Late or due today")
     do {
         let lateTasks = [
             NotionTask(id: "a", title: "due yesterday", status: "To Do",
-                       priority: .p2, dueDate: past, createdTime: day(2026, 6, 1, cal)),
+                       priority: "P2", dueDate: past, createdTime: day(2026, 6, 1, cal)),
             NotionTask(id: "b", title: "due today", status: "In Progress",
-                       priority: .p0, dueDate: today, createdTime: day(2026, 5, 1, cal)),
+                       priority: "P0", dueDate: today, createdTime: day(2026, 5, 1, cal)),
             NotionTask(id: "c", title: "due in the future", status: "To Do",
-                       priority: .p1, dueDate: future, createdTime: day(2026, 6, 1, cal)),
+                       priority: "P1", dueDate: future, createdTime: day(2026, 6, 1, cal)),
             NotionTask(id: "d", title: "no due date", status: "Blocked",
-                       priority: .p0, dueDate: nil, createdTime: day(2026, 6, 1, cal)),
+                       priority: "P0", dueDate: nil, createdTime: day(2026, 6, 1, cal)),
             NotionTask(id: "done", title: "done but overdue", status: "Done",
-                       priority: .p0, dueDate: past, createdTime: day(2026, 6, 1, cal)),
+                       priority: "P0", dueDate: past, createdTime: day(2026, 6, 1, cal)),
         ]
         let late = TaskListEngine.lateOrDueToday(
             lateTasks, openStatuses: openStatuses, today: today, calendar: cal)
@@ -157,24 +201,24 @@ func taskListEngineChecks(_ t: CheckRun) async {
         let personal: Set<String> = ["📝 Life admin", "👥 Friends & Family"]
         let homeTasks = [
             NotionTask(id: "p0", title: "personal P0", status: "To Do",
-                       priority: .p0, dueDate: today, category: "📝 Life admin"),
+                       priority: "P0", dueDate: today, category: "📝 Life admin"),
             NotionTask(id: "p1", title: "personal P1", status: "Blocked",
-                       priority: .p1, dueDate: past, category: "👥 Friends & Family"),
+                       priority: "P1", dueDate: past, category: "👥 Friends & Family"),
             NotionTask(id: "work", title: "work P0", status: "To Do",
-                       priority: .p0, dueDate: today, category: work),                 // excluded: Work
+                       priority: "P0", dueDate: today, category: work),                 // excluded: Work
             NotionTask(id: "defer", title: "deferred personal", status: "To Do",
-                       priority: .p0, category: "📝 Life admin", startFrom: future),    // excluded: deferred
+                       priority: "P0", category: "📝 Life admin", startFrom: future),    // excluded: deferred
             NotionTask(id: "nocat", title: "uncategorised", status: "To Do",
-                       priority: .p0, category: nil),                                  // excluded: no category
+                       priority: "P0", category: nil),                                  // excluded: no category
             NotionTask(id: "done", title: "done personal", status: "Done",
-                       priority: .p0, category: "📝 Life admin"),                       // excluded: not open
+                       priority: "P0", category: "📝 Life admin"),                       // excluded: not open
         ]
         let home = TaskListEngine.homePriorities(
             homeTasks, openStatuses: openStatuses, personalCategories: personal,
-            today: today, calendar: cal)
+            priorityOrder: ["P0", "P1", "P2"], today: today, calendar: cal)
 
         await t.test("groups open personal tasks by priority") {
-            t.expectEqual(home.map(\.priority), [.p0, .p1])
+            t.expectEqual(home.map(\.priority), ["P0", "P1"])
             t.expectEqual(home.first?.tasks.map(\.id), ["p0"])
             t.expect(home.count == 2 && home[1].tasks.map(\.id) == ["p1"],
                      "P1 holds the one open personal P1 task")
@@ -194,15 +238,15 @@ func taskListEngineChecks(_ t: CheckRun) async {
     t.suite("TaskListEngine — Custom filter and sort")
     do {
         let customTasks = [
-            NotionTask(id: "s1", title: "Alpha", status: "To Do", priority: .p0,
+            NotionTask(id: "s1", title: "Alpha", status: "To Do", priority: "P0",
                        dueDate: today, category: work,
                        createdTime: day(2026, 6, 1, cal), lastEditedTime: day(2026, 6, 25, cal),
                        workType: "Strategy"),
-            NotionTask(id: "s2", title: "Bravo", status: "In Progress", priority: .p1,
+            NotionTask(id: "s2", title: "Bravo", status: "In Progress", priority: "P1",
                        dueDate: past, category: "📝 Life admin",
                        createdTime: day(2026, 6, 5, cal), lastEditedTime: day(2026, 6, 10, cal),
                        workType: "Reporting/Comms"),
-            NotionTask(id: "s3", title: "Charlie", status: "Blocked", priority: .p2,
+            NotionTask(id: "s3", title: "Charlie", status: "Blocked", priority: "P2",
                        dueDate: future, category: work,
                        createdTime: day(2026, 6, 3, cal), lastEditedTime: day(2026, 6, 20, cal),
                        workType: "Admin"),
@@ -214,12 +258,15 @@ func taskListEngineChecks(_ t: CheckRun) async {
                        createdTime: day(2026, 6, 9, cal), lastEditedTime: day(2026, 6, 9, cal)),
         ]
         func ids(_ q: CustomQuery) -> [String] {
-            TaskListEngine.custom(customTasks, query: q, today: today, calendar: cal)
+            TaskListEngine.custom(customTasks, query: q, priorityOrder: ["P0", "P1", "P2"],
+                                  today: today, calendar: cal)
                 .first?.tasks.map(\.id) ?? []
         }
 
         await t.test("an empty query returns every task as one flat group") {
-            let groups = TaskListEngine.custom(customTasks, query: .empty, today: today, calendar: cal)
+            let groups = TaskListEngine.custom(customTasks, query: .empty,
+                                               priorityOrder: ["P0", "P1", "P2"],
+                                               today: today, calendar: cal)
             t.expectEqual(groups.count, 1)
             t.expect(groups.first?.priority == nil, "custom results are a flat, headerless group")
             t.expectEqual(groups.first?.tasks.count, 5)
@@ -272,6 +319,29 @@ func taskListEngineChecks(_ t: CheckRun) async {
             // edited: s1 6/25, s3 6/20, s2 6/10, s5 6/9, s4 6/1.
             t.expectEqual(ids(CustomQuery(sortField: .lastEdited, ascending: false)),
                           ["s1", "s3", "s2", "s5", "s4"])
+        }
+
+        await t.test("custom filter and sort handle priorities beyond P0/P1/P2 (#15)") {
+            let mixed = [
+                NotionTask(id: "m1", title: "Alpha", status: "To Do", priority: "P3"),
+                NotionTask(id: "m2", title: "Bravo", status: "To Do", priority: "P0"),
+                NotionTask(id: "m3", title: "Charlie", status: "To Do", priority: "Zeta"),
+                NotionTask(id: "m4", title: "Delta", status: "To Do", priority: nil),
+            ]
+            func mixedIDs(_ q: CustomQuery) -> [String] {
+                TaskListEngine.custom(mixed, query: q, priorityOrder: ["P0", "P1", "P2", "P3"],
+                                      today: today, calendar: cal)
+                    .first?.tasks.map(\.id) ?? []
+            }
+            // The filter matches by name equality — any schema option works.
+            t.expectEqual(mixedIDs(CustomQuery(priorities: ["P3"])), ["m1"])
+            // Ascending: schema rank (P0 … P3), then the schema-unknown name,
+            // then missing.
+            t.expectEqual(mixedIDs(CustomQuery(sortField: .priority, ascending: true)),
+                          ["m2", "m1", "m3", "m4"])
+            // Descending flips the present ranks; missing stays last.
+            t.expectEqual(mixedIDs(CustomQuery(sortField: .priority, ascending: false)),
+                          ["m3", "m1", "m2", "m4"])
         }
 
         await t.test("isFiltering reflects filters only, and cleared() keeps the sort") {
