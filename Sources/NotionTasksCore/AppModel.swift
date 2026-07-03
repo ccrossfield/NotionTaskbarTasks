@@ -54,6 +54,22 @@ public final class AppModel: ObservableObject {
     /// Published so a header toggle reflows the list at once. Empty means
     /// everything expanded — the first-run default.
     @Published private var collapsedGroups: Set<String> = []
+    /// Whether the quick-add composer is open (#22). Model-owned rather than
+    /// view @State so the app shell's Esc handling can close the composer
+    /// first and only fall through to closing the panel when it's shut.
+    @Published public private(set) var isComposing = false
+    /// Whether a create is in flight (#22): the composer's Add button shows a
+    /// spinner and disables, mirroring `isRefreshing`.
+    @Published public private(set) var isCreating = false
+    /// Set when a create fails, so the composer can say why while keeping the
+    /// typed draft. Cleared when a create is attempted or the composer
+    /// opens/closes.
+    @Published public private(set) var createError: String?
+    /// Set when a create succeeded but the new task doesn't match the active
+    /// view's filter (#22) — otherwise Add would appear to do nothing while
+    /// the task lands invisibly. One-shot: the view clears it after showing
+    /// it; the next create or refresh clears it too.
+    @Published public private(set) var createNotice: String?
 
     private let tokenStore: TokenStore
     private let cache: TaskCache?
@@ -77,6 +93,11 @@ public final class AppModel: ObservableObject {
     private var openStatuses: Set<String> = NotionConfig.fallbackOpenStatuses
     private var workCategory: String = NotionConfig.fallbackWorkCategory
     private var personalCategories: Set<String> = NotionConfig.fallbackPersonalCategories
+    /// The title property's name, keying the create payload (#22). Resolved
+    /// from the live schema on load; the fallback ("Task") applies only until
+    /// the first successful schema fetch — and a create needs the network up,
+    /// so in practice a fresh resolution has almost always just happened.
+    private var titleProperty: String = NotionConfig.fallbackTitleProperty
 
     /// - Parameters:
     ///   - cache: the last-fetched snapshot, shown instantly while a fresh fetch
@@ -173,9 +194,93 @@ public final class AppModel: ObservableObject {
         }
     }
 
+    /// Open the quick-add composer (#22). Messages from the previous
+    /// composition die here — they belong to a draft that no longer exists.
+    public func openComposer() {
+        createError = nil
+        createNotice = nil
+        isComposing = true
+    }
+
+    /// Close the composer, discarding whatever was typed. The error goes with
+    /// the draft it described.
+    public func closeComposer() {
+        isComposing = false
+        createError = nil
+    }
+
+    /// The view clears the one-shot "added — not visible" notice once shown.
+    public func clearCreateNotice() {
+        createNotice = nil
+    }
+
+    /// The composer's pre-filled draft for the active view (#22): Work on
+    /// Pivotal Priorities, due-today on Late or due today, empty elsewhere.
+    /// Uses the schema-derived Work category, like the preset filters do.
+    public func composerDraft(today: Date = Date(), calendar: Calendar = .current) -> TaskDraft {
+        ComposerDefaults.draft(for: preset, isCustom: isCustom,
+                               workCategory: workCategory, today: today, calendar: calendar)
+    }
+
+    /// Create a task in Notion (#22). Pessimistic like `setStatus`: the row
+    /// appears only after the POST succeeds, decoded from the response so the
+    /// list shows what Notion actually stored (including the defaulted
+    /// status). Returns whether it succeeded; on failure the composer stays
+    /// open, so the typed draft is never lost to a network hiccup.
+    @discardableResult
+    public func createTask(_ draft: TaskDraft,
+                           today: Date = Date(),
+                           calendar: Calendar = .current) async -> Bool {
+        guard case .loaded = state else { return false }
+        guard let token = tokenStore.read(), !token.isEmpty else { return false }
+        var draft = draft
+        draft.title = draft.trimmedTitle
+        guard !draft.title.isEmpty else { return false }
+        createError = nil
+        createNotice = nil
+        isCreating = true
+        defer { isCreating = false }
+        do {
+            let created = try await makeClient(token)
+                .createTask(draft, titleProperty: titleProperty)
+            isComposing = false
+            // Re-read the state as it is *now* — the await is a suspension
+            // point and a refresh may have landed meanwhile (issue #12).
+            guard case .loaded(let current) = state else { return true }
+            let updated = current + [created]
+            state = .loaded(updated)
+            // Keep the cache in step, as setStatus does. A write isn't a
+            // fetch, so the snapshot keeps its fetch time.
+            cache?.save(CachedSnapshot(
+                tasks: updated, openStatuses: openStatuses, workCategory: workCategory,
+                personalCategories: personalCategories, schemaOptions: schemaOptions,
+                fetchedAt: lastRefreshed ?? now()))
+            // The task is real wherever the panel is pointing — but if it
+            // doesn't match the active view's filter, say so rather than let
+            // Add appear to have done nothing.
+            let visible = groups(today: today, calendar: calendar)
+                .contains { $0.tasks.contains { $0.id == created.id } }
+            createNotice = visible ? nil : "Added to Notion - not visible in \(activeTitle)."
+            return true
+        } catch NotionClientError.unauthorized {
+            // Mirror every other write path (#13): a dead token can't be
+            // retried into working, so drop it and route to reconnect.
+            try? tokenStore.delete()
+            state = .failed("Notion rejected the stored token, so that task wasn't created. Enter a new token to reconnect.")
+            return false
+        } catch NotionClientError.rateLimited {
+            createError = "Notion is rate-limiting the app right now. Wait a minute, then try again."
+            return false
+        } catch {
+            createError = "Couldn't add that task to Notion. Try again."
+            return false
+        }
+    }
+
     /// Re-fetch with the token already stored.
     public func refresh() async {
         writeError = nil
+        createNotice = nil
         await start()
     }
 
@@ -359,6 +464,7 @@ public final class AppModel: ObservableObject {
                 if let work = schema.workCategoryName { workCategory = work }
                 let personal = schema.personalCategoryNames
                 if !personal.isEmpty { personalCategories = Set(personal) }
+                if let title = schema.titlePropertyName { titleProperty = title }
                 schemaOptions = schema.filterOptions
             } catch {
                 schemaFailed = true

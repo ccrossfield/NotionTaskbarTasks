@@ -342,6 +342,112 @@ func clientChecks(_ t: CheckRun) async {
 
         t.expectEqual(sleeps.durations, [7])
     }
+
+    t.suite("NotionClient create path (#22)")
+
+    // What POST /v1/pages returns: a full page object, same shape as a query
+    // result row. The Status is what Notion defaulted, never what we sent.
+    let createdPage = Data("""
+    {
+      "id": "page-new-1",
+      "created_time": "2026-07-03T10:00:00.000Z",
+      "last_edited_time": "2026-07-03T10:00:00.000Z",
+      "url": "https://www.notion.so/Book-the-venue-pagenew1",
+      "properties": {
+        "Task": { "type": "title", "title": [{ "plain_text": "Book the venue" }] },
+        "Status": { "type": "status", "status": { "name": "To Do" } },
+        "Priority": { "type": "select", "select": { "name": "P1" } }
+      }
+    }
+    """.utf8)
+
+    await t.test("createTask POSTs the data-source parent, the resolved title name, and no Status") {
+        let stub = StubHTTPClient(responseData: createdPage, statusCode: 200)
+        let client = NotionClient(dataSourceID: dataSource, token: "ntn_test", http: stub)
+        let due = Calendar.current.date(
+            from: DateComponents(year: 2026, month: 7, day: 14, hour: 12))!
+        let draft = TaskDraft(title: "Book the venue", priority: "P1",
+                              category: "👨🏻‍💻 Work", dueDate: due)
+
+        _ = try await client.createTask(draft, titleProperty: "Renamed title")
+
+        let request = try require(stub.lastRequest)
+        t.expect(request.httpMethod == "POST", "method was \(request.httpMethod ?? "nil")")
+        t.expect(request.url?.absoluteString == "https://api.notion.com/v1/pages",
+                 "url was \(request.url?.absoluteString ?? "nil")")
+        t.expect(request.value(forHTTPHeaderField: "Notion-Version") == "2025-09-03", "version header")
+
+        let body = try JSONSerialization.jsonObject(
+            with: try require(request.httpBody)) as? [String: Any]
+        // The DB is multi-source: the parent must target the primary data
+        // source, exactly like every query does.
+        let parent = body?["parent"] as? [String: Any]
+        t.expect(parent?["type"] as? String == "data_source_id",
+                 "parent type was \(parent?["type"] as? String ?? "nil")")
+        t.expect(parent?["data_source_id"] as? String == dataSource,
+                 "parent target was \(parent?["data_source_id"] as? String ?? "nil")")
+
+        // Status deliberately absent: Notion applies the DB default, so a
+        // renamed default option can never fail the create.
+        let properties = body?["properties"] as? [String: Any]
+        t.expect(properties?.keys.sorted() == ["Category", "Due Date", "Priority", "Renamed title"],
+                 "property keys were \(properties?.keys.sorted() ?? [])")
+        let titleContent = (((properties?["Renamed title"] as? [String: Any])?["title"]
+            as? [[String: Any]])?.first?["text"] as? [String: Any])?["content"] as? String
+        t.expect(titleContent == "Book the venue", "title content was \(titleContent ?? "nil")")
+        let priority = ((properties?["Priority"] as? [String: Any])?["select"]
+            as? [String: Any])?["name"] as? String
+        t.expect(priority == "P1", "priority was \(priority ?? "nil")")
+        let category = ((properties?["Category"] as? [String: Any])?["select"]
+            as? [String: Any])?["name"] as? String
+        t.expect(category == "👨🏻‍💻 Work", "category was \(category ?? "nil")")
+        // Date-only, local calendar day - the mirror of the decoder's
+        // date-only parse, which anchors to local midnight.
+        let start = ((properties?["Due Date"] as? [String: Any])?["date"]
+            as? [String: Any])?["start"] as? String
+        t.expect(start == "2026-07-14", "due start was \(start ?? "nil")")
+    }
+
+    await t.test("a title-only draft sends only the title property") {
+        let stub = StubHTTPClient(responseData: createdPage, statusCode: 200)
+        let client = NotionClient(dataSourceID: dataSource, token: "ntn_test", http: stub)
+
+        _ = try await client.createTask(TaskDraft(title: "Just a thought"), titleProperty: "Task")
+
+        let body = try JSONSerialization.jsonObject(
+            with: try require(stub.lastRequest?.httpBody)) as? [String: Any]
+        let properties = body?["properties"] as? [String: Any]
+        t.expect(properties?.keys.sorted() == ["Task"],
+                 "property keys were \(properties?.keys.sorted() ?? [])")
+    }
+
+    await t.test("createTask returns the task decoded from the response - Notion's defaults included") {
+        let stub = StubHTTPClient(responseData: createdPage, statusCode: 200)
+        let client = NotionClient(dataSourceID: dataSource, token: "ntn_test", http: stub)
+
+        let task = try await client.createTask(TaskDraft(title: "Book the venue"),
+                                               titleProperty: "Task")
+
+        t.expectEqual(task.id, "page-new-1")
+        t.expectEqual(task.title, "Book the venue")
+        // We never sent a Status; the response says what Notion defaulted to.
+        t.expect(task.status == "To Do", "status was \(task.status ?? "nil")")
+        t.expect(task.priority == "P1", "priority was \(String(describing: task.priority))")
+        t.expectEqual(task.url, "https://www.notion.so/Book-the-venue-pagenew1")
+    }
+
+    await t.test("a failed create throws") {
+        let stub = StubHTTPClient(responseData: Data(), statusCode: 500)
+        let client = NotionClient(dataSourceID: dataSource, token: "t", http: stub)
+        do {
+            _ = try await client.createTask(TaskDraft(title: "Doomed"), titleProperty: "Task")
+            t.expect(false, "expected createTask to throw")
+        } catch NotionClientError.httpError(let code) {
+            t.expectEqual(code, 500)
+        } catch {
+            t.expect(false, "wrong error: \(error)")
+        }
+    }
 }
 
 /// Captures the durations the injected sleep seam was asked to wait for, so a

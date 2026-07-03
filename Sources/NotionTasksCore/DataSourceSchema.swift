@@ -55,6 +55,13 @@ public struct DataSourceSchema: Decodable {
         return Set(status.options.filter { !completeIDs.contains($0.id) }.map(\.name))
     }
 
+    /// The title property's user-chosen name ("Task"). The decoder finds the
+    /// title by type, which survives a rename; the create payload is keyed by
+    /// name, so this carries that same rename-proofing to the write path (#22).
+    public var titlePropertyName: String? {
+        properties.first { $0.value.type == "title" }?.key
+    }
+
     /// The Category select option names, in schema order. Feeds the "Work"
     /// resolution below and the custom filter UI (#6).
     public var categoryOptionNames: [String] {
