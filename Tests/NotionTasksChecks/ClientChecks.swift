@@ -263,6 +263,58 @@ func clientChecks(_ t: CheckRun) async {
         }
     }
 
+    await t.test("a 429 with no Retry-After header still backs off before retrying") {
+        let stub = StubHTTPClient(script: [
+            StubResponse(data: Data("{}".utf8), statusCode: 429), // no headers at all
+            StubResponse(data: try fixtureData("query_response"), statusCode: 200),
+        ])
+        let sleeps = SleepRecorder()
+        let client = NotionClient(dataSourceID: dataSource, token: "ntn_test", http: stub,
+                                  sleep: sleeps.record)
+
+        let tasks = try await client.fetchTasks()
+
+        t.expectEqual(tasks.count, 5)
+        t.expectEqual(sleeps.durations.count, 1)
+        t.expect(sleeps.durations.allSatisfy { $0 > 0 },
+                 "a missing Retry-After must not mean an instant re-send, slept \(sleeps.durations)")
+    }
+
+    await t.test("a 429 with an unparseable Retry-After (HTTP-date) uses the non-zero default") {
+        let stub = StubHTTPClient(script: [
+            StubResponse(data: Data("{}".utf8), statusCode: 429,
+                         headers: ["Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"]),
+            StubResponse(data: try fixtureData("query_response"), statusCode: 200),
+        ])
+        let sleeps = SleepRecorder()
+        let client = NotionClient(dataSourceID: dataSource, token: "ntn_test", http: stub,
+                                  sleep: sleeps.record)
+
+        _ = try await client.fetchTasks()
+
+        t.expectEqual(sleeps.durations.count, 1)
+        t.expect(sleeps.durations.allSatisfy { $0 > 0 },
+                 "an unparseable Retry-After must not mean an instant re-send, slept \(sleeps.durations)")
+    }
+
+    await t.test("headerless 429s all the way to the cap back off more each attempt") {
+        let stub = StubHTTPClient(script: [
+            StubResponse(data: Data("{}".utf8), statusCode: 429), // repeats: script's last step replays
+        ])
+        let sleeps = SleepRecorder()
+        let client = NotionClient(dataSourceID: dataSource, token: "ntn_test", http: stub,
+                                  sleep: sleeps.record)
+        do {
+            _ = try await client.fetchTasks()
+            t.expect(false, "expected fetchTasks to throw")
+        } catch NotionClientError.rateLimited {
+            // Exponential 1/2/4: escalating pressure release when Notion gives no guidance.
+            t.expectEqual(sleeps.durations, [1, 2, 4])
+        } catch {
+            t.expect(false, "wrong error: \(error)")
+        }
+    }
+
     await t.test("Retry-After is honoured - the sleep duration matches the header") {
         let stub = StubHTTPClient(script: [
             StubResponse(data: Data("{}".utf8), statusCode: 429, headers: ["Retry-After": "7"]),

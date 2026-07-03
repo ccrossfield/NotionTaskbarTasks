@@ -134,9 +134,14 @@ public struct NotionClient {
                     throw NotionClientError.rateLimited
                 }
                 attempt += 1
-                let retryAfter = TimeInterval(
-                    httpResponse.value(forHTTPHeaderField: "Retry-After").flatMap(Int.init) ?? 0)
-                await sleep(retryAfter)
+                // Retry-After may be absent, or in the HTTP-date form Int.init
+                // can't parse. Never re-send instantly against an API that just
+                // throttled us: fall back to exponential 1/2/4s across the
+                // three retries.
+                let headerSeconds = httpResponse.value(forHTTPHeaderField: "Retry-After")
+                    .flatMap(Int.init).map(TimeInterval.init)
+                let backoff = headerSeconds ?? TimeInterval(1 << (attempt - 1))
+                await sleep(backoff)
             default:
                 throw NotionClientError.httpError(httpResponse.statusCode)
             }
