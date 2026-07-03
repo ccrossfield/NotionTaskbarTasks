@@ -653,29 +653,61 @@ struct ContentView: View {
     /// Line 2: Priority · Due date · Category, with absent fields omitted so
     /// there are no stray separators. Renders nothing when all are absent.
     /// `showPriority` is false in grouped views, where the header carries it.
+    ///
+    /// The due date is its own `Text` so it alone carries the urgency tint
+    /// (#25, ADR-0003); the separators and category stay secondary grey.
     @ViewBuilder
     private func metadata(for task: NotionTask, showPriority: Bool) -> some View {
-        // Due and category are plain text; join them so separators only appear
-        // between present segments.
-        let textSegments = [task.relativeDueText(), task.category].compactMap { $0 }
+        let due = task.relativeDueText()
         let withPriority = showPriority && task.priority != nil
-        if withPriority || !textSegments.isEmpty {
+        if withPriority || due != nil || task.category != nil {
             HStack(spacing: 5) {
                 if withPriority, let priority = task.priority {
                     Circle()
                         .fill(colour(for: priority))
                         .frame(width: 7, height: 7)
                     Text(priority)
-                    if !textSegments.isEmpty { Text("·") }
+                    if due != nil || task.category != nil { Text("·") }
                 }
-                if !textSegments.isEmpty {
-                    Text(textSegments.joined(separator: " · "))
+                if let due {
+                    dueText(due, bucket: task.dueBucket())
+                    if task.category != nil { Text("·") }
+                }
+                if let category = task.category {
+                    Text(category)
                 }
             }
             .font(.caption)
             .foregroundStyle(.secondary)
         }
     }
+
+    /// The due segment, tinted by urgency (#25): overdue pops red semibold,
+    /// today is orange, the coming week is amber, everything else keeps the
+    /// metadata line's secondary grey. The tint is confined to this text —
+    /// the dot stays the priority channel (ADR-0003).
+    @ViewBuilder
+    private func dueText(_ text: String, bucket: DueBucket) -> some View {
+        switch bucket {
+        case .overdue:
+            Text(text).fontWeight(.semibold).foregroundStyle(.red)
+        case .today:
+            Text(text).foregroundStyle(.orange)
+        case .soon:
+            Text(text).foregroundStyle(Self.soonAmber)
+        case .later, .none:
+            Text(text)
+        }
+    }
+
+    /// A custom adaptive amber for the "soon" bucket: system yellow is
+    /// illegible at caption size on a light background, so light mode gets a
+    /// darker ochre and dark mode a brighter gold.
+    private static let soonAmber = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(red: 1.00, green: 0.75, blue: 0.28, alpha: 1)
+            : NSColor(red: 0.70, green: 0.46, blue: 0.02, alpha: 1)
+    })
 
     /// The only colour in the list: P0 red, P1 amber, P2 green (ADR-0002).
     /// A priority name beyond those three gets a neutral dot — the schema can
