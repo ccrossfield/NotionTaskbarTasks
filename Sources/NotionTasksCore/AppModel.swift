@@ -44,6 +44,10 @@ public final class AppModel: ObservableObject {
     /// The filter option lists offered by the custom view, derived from the
     /// fetched schema (#6). Falls back to constants until the schema loads.
     @Published public private(set) var schemaOptions: SchemaOptions = .fallback
+    /// Which priority groups are folded away in grouped presets (#19).
+    /// Published so a header toggle reflows the list at once. Empty means
+    /// everything expanded — the first-run default.
+    @Published private var collapsedGroups: Set<String> = []
 
     private let tokenStore: TokenStore
     private let cache: TaskCache?
@@ -96,6 +100,8 @@ public final class AppModel: ObservableObject {
             self.isCustom = config.isCustom
             self.customQuery = config.customQuery
         }
+        // Folded groups are remembered too (#19); never-set means all expanded.
+        self.collapsedGroups = preferences?.collapsedGroups ?? []
     }
 
     /// One minute: fresh enough for the menu-bar badge, and 1-2 requests a
@@ -245,6 +251,25 @@ public final class AppModel: ObservableObject {
     public func updateCustom(_ query: CustomQuery) {
         customQuery = query
         persistViewConfig()
+    }
+
+    /// Whether a priority group's rows are folded away in the active preset
+    /// (#19). `nil` is the "No priority" group.
+    public func isCollapsed(_ priority: Priority?) -> Bool {
+        collapsedGroups.contains(groupKey(priority))
+    }
+
+    /// Fold or unfold a priority group's rows in the active preset (#19).
+    /// Remembered at once, like every other view change (#9).
+    public func toggleCollapsed(_ priority: Priority?) {
+        collapsedGroups.formSymmetricDifference([groupKey(priority)])
+        preferences?.collapsedGroups = collapsedGroups
+    }
+
+    /// Keyed by preset as well as priority, so folding P2 in Pivotal leaves
+    /// Home's P2 alone.
+    private func groupKey(_ priority: Priority?) -> String {
+        "\(preset.rawValue)|\(priority?.rawValue ?? "none")"
     }
 
     /// Every view change is remembered at once (#9); there is no "save" moment

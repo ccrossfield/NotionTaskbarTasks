@@ -23,6 +23,8 @@ public protocol PreferencesStore: AnyObject {
     var autoRefreshInterval: TimeInterval? { get set }
     /// The last-used view configuration (#9).
     var viewConfig: ViewConfig? { get set }
+    /// The folded priority groups (#19), as "preset|priority" keys.
+    var collapsedGroups: Set<String>? { get set }
 }
 
 /// Stores preferences in `UserDefaults`. `suite` is injectable so a check can
@@ -60,8 +62,21 @@ public final class UserDefaultsPreferences: PreferencesStore {
         }
     }
 
+    /// Stored as a plain string array — a `Set` is not a plist type.
+    public var collapsedGroups: Set<String>? {
+        get { defaults.stringArray(forKey: Keys.collapsedGroups).map(Set.init) }
+        set {
+            if let newValue {
+                defaults.set(Array(newValue), forKey: Keys.collapsedGroups)
+            } else {
+                defaults.removeObject(forKey: Keys.collapsedGroups)
+            }
+        }
+    }
+
     private enum Keys {
         static let autoRefreshInterval = "autoRefreshInterval"
         static let viewConfig = "viewConfig"
+        static let collapsedGroups = "collapsedGroups"
     }
 }

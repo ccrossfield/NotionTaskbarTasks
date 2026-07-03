@@ -181,17 +181,21 @@ struct ContentView: View {
     }
 
     /// The rows themselves, shared by the scrolling and non-scrolling branches.
+    /// A collapsed group (#19) keeps its header and folds its rows away; flat
+    /// presets have no headers, so nothing there can collapse.
     @ViewBuilder
     private func listContent(_ groups: [TaskGroup], grouped: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(groups, id: \.priority) { group in
                 if grouped {
-                    sectionHeader(group.priority)
+                    sectionHeader(group)
                 }
-                ForEach(group.tasks) { task in
-                    row(for: task, showPriority: !grouped)
-                        .padding(.vertical, 6)
-                    Divider()
+                if !grouped || !model.isCollapsed(group.priority) {
+                    ForEach(group.tasks) { task in
+                        row(for: task, showPriority: !grouped)
+                            .padding(.vertical, 6)
+                        Divider()
+                    }
                 }
             }
         }
@@ -305,21 +309,41 @@ struct ContentView: View {
         }
     }
 
-    private func sectionHeader(_ priority: Priority?) -> some View {
-        HStack(spacing: 5) {
-            if let priority {
-                Circle()
-                    .fill(colour(for: priority))
-                    .frame(width: 7, height: 7)
-                Text(priority.rawValue)
-            } else {
-                Text("No priority")
+    /// A priority group's header, and the control that folds it (#19): the
+    /// whole row is one full-width plain button — no precision chevron target
+    /// in a 340px panel. The leading chevron carries the affordance; a
+    /// collapsed header says how many rows it is hiding. No animation: the
+    /// panel should feel instant.
+    private func sectionHeader(_ group: TaskGroup) -> some View {
+        let collapsed = model.isCollapsed(group.priority)
+        return Button {
+            model.toggleCollapsed(group.priority)
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: collapsed ? "chevron.right" : "chevron.down")
+                    .font(.caption2)
+                if let priority = group.priority {
+                    Circle()
+                        .fill(colour(for: priority))
+                        .frame(width: 7, height: 7)
+                    Text(priority.rawValue)
+                } else {
+                    Text("No priority")
+                }
+                if collapsed {
+                    Text("(\(group.tasks.count))")
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
             }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(group.priority == nil ? Color.secondary : Color.primary)
+            .padding(.top, 8)
+            .padding(.bottom, 2)
+            .contentShape(Rectangle())
         }
-        .font(.caption.weight(.semibold))
-        .foregroundStyle(priority == nil ? Color.secondary : Color.primary)
-        .padding(.top, 8)
-        .padding(.bottom, 2)
+        .buttonStyle(.plain)
+        .accessibilityLabel(collapsed ? "Expand group" : "Collapse group")
     }
 
     private func row(for task: NotionTask, showPriority: Bool = true) -> some View {

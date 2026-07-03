@@ -43,12 +43,24 @@ func preferencesChecks(_ t: CheckRun) async {
         defaults.removePersistentDomain(forName: suiteName)
     }
 
+    await t.test("the folded priority groups round-trip") {
+        let defaults = try scratchDefaults()
+        let folded: Set<String> = ["pivotalPriorities|P2", "homePriorities|none"]
+
+        UserDefaultsPreferences(defaults: defaults).collapsedGroups = folded
+
+        let reloaded = UserDefaultsPreferences(defaults: try require(UserDefaults(suiteName: suiteName)))
+        t.expectEqual(reloaded.collapsedGroups, folded)
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
     await t.test("an empty store yields nil, not a phantom configuration") {
         let defaults = try scratchDefaults()
         let prefs = UserDefaultsPreferences(defaults: defaults)
 
         t.expect(prefs.viewConfig == nil, "nothing was ever saved")
         t.expect(prefs.autoRefreshInterval == nil, "nothing was ever saved")
+        t.expect(prefs.collapsedGroups == nil, "nothing was ever saved")
         defaults.removePersistentDomain(forName: suiteName)
     }
 }

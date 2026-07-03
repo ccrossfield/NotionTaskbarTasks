@@ -62,6 +62,7 @@ actor GateHTTPClient: HTTPClient {
 final class InMemoryPreferences: PreferencesStore {
     var autoRefreshInterval: TimeInterval?
     var viewConfig: ViewConfig?
+    var collapsedGroups: Set<String>?
     init(autoRefreshInterval: TimeInterval? = nil) {
         self.autoRefreshInterval = autoRefreshInterval
     }
@@ -1027,6 +1028,62 @@ func appModelChecks(_ t: CheckRun) async {
                  "task A's completed status was clobbered by task B's write landing")
         t.expect(tasks.first { $0.id == secondTaskID }?.status == "Done",
                  "task B should show Done")
+    }
+
+    t.suite("AppModel collapsible groups")
+
+    await t.test("priority groups start expanded; toggling collapses and re-expands only that group") {
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)
+        let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
+
+        t.expect(!model.isCollapsed(.p0), "everything starts expanded on first run")
+        t.expect(!model.isCollapsed(nil), "the no-priority group starts expanded too")
+
+        model.toggleCollapsed(.p0)
+        t.expect(model.isCollapsed(.p0), "toggling a header collapses that group")
+        t.expect(!model.isCollapsed(.p1), "other groups are untouched")
+        t.expect(!model.isCollapsed(nil), "the no-priority group is untouched")
+
+        model.toggleCollapsed(.p0)
+        t.expect(!model.isCollapsed(.p0), "toggling again re-expands the group")
+    }
+
+    await t.test("collapse is per preset: P2 folded in Pivotal leaves Home's P2 expanded") {
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)
+        let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
+
+        // Active preset is the Pivotal default.
+        model.toggleCollapsed(.p2)
+        t.expect(model.isCollapsed(.p2), "Pivotal's P2 collapses")
+
+        model.selectPreset(.homePriorities)
+        t.expect(!model.isCollapsed(.p2), "Home's P2 keeps its own, expanded state")
+
+        model.selectPreset(.pivotalPriorities)
+        t.expect(model.isCollapsed(.p2), "Pivotal's P2 is still collapsed on return")
+    }
+
+    await t.test("collapse state survives a relaunch, still independently per preset") {
+        let prefs = InMemoryPreferences()
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)
+        let firstLaunch = AppModel(tokenStore: store, preferences: prefs) {
+            NotionClient(dataSourceID: ds, token: $0, http: stub)
+        }
+        firstLaunch.toggleCollapsed(.p2) // in the Pivotal default
+        firstLaunch.toggleCollapsed(nil)
+
+        // The next launch reads the same preferences.
+        let relaunch = AppModel(tokenStore: store, preferences: prefs) {
+            NotionClient(dataSourceID: ds, token: $0, http: stub)
+        }
+        t.expect(relaunch.isCollapsed(.p2), "Pivotal's folded P2 is remembered")
+        t.expect(relaunch.isCollapsed(nil), "the folded no-priority group is remembered")
+        t.expect(!relaunch.isCollapsed(.p0), "P0 was never folded")
+        relaunch.selectPreset(.homePriorities)
+        t.expect(!relaunch.isCollapsed(.p2), "Home's P2 is still expanded")
     }
 
     await t.test("a refresh that lands while a write is in flight is not overwritten by stale data") {
