@@ -479,6 +479,14 @@ public final class AppModel: ObservableObject {
                 tasks: tasks, openStatuses: openStatuses, workCategory: workCategory,
                 personalCategories: personalCategories, schemaOptions: schemaOptions,
                 fetchedAt: lastRefreshed ?? now()))
+        } catch is CancellationError {
+            // The fetch was torn down on purpose — a poll restart (#27) or
+            // sign-out cancelled its task. No news, not a failure; the next
+            // tick refreshes.
+            return
+        } catch let error as URLError where error.code == .cancelled {
+            // URLSession reports mid-flight cancellation as its own error.
+            return
         } catch NotionClientError.unauthorized {
             // The token is bad; drop it so the next launch re-prompts. This one
             // interrupts even with a list on screen — showing stale data against

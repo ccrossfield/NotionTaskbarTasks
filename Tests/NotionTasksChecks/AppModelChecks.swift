@@ -117,6 +117,28 @@ final class SwitchableHTTPClient: HTTPClient {
     }
 }
 
+/// Delegates to a stub until `parkRequests` is set; then a request hangs like
+/// a slow network call and, when its surrounding task is cancelled, throws
+/// `URLError(.cancelled)` — mirroring what `URLSession.data(for:)` does to an
+/// in-flight request (#27).
+final class CancellableParkingHTTPClient: HTTPClient {
+    var parkRequests = false
+    private(set) var parkedCount = 0
+    private let inner: HTTPClient
+    init(wrapping inner: HTTPClient) { self.inner = inner }
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        if parkRequests {
+            parkedCount += 1
+            do {
+                while true { try await Task.sleep(nanoseconds: 1_000_000) }
+            } catch {
+                throw URLError(.cancelled)
+            }
+        }
+        return try await inner.data(for: request)
+    }
+}
+
 /// Wraps another stub and holds only PATCH requests at a gate, letting reads
 /// straight through — so a check can land a full refresh (or a second write's
 /// read of the state) while a status write is still in flight.
@@ -945,6 +967,42 @@ func appModelChecks(_ t: CheckRun) async {
         for _ in 0..<100 { await Task.yield() }
 
         t.expectEqual(stub.requestCount, fetchesBefore)
+    }
+
+    await t.test("changing the poll interval mid-fetch is not reported as a connection failure (#27)") {
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let transport = CancellableParkingHTTPClient(
+            wrapping: StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200))
+        let ticker = PollTicker()
+        let model = AppModel(tokenStore: store, pollSleep: ticker.sleep) {
+            NotionClient(dataSourceID: ds, token: $0, http: transport)
+        }
+        await model.start() // loads normally: the list is on screen
+
+        model.startPolling(every: 60)
+        var spins = 0
+        while await ticker.intervals.isEmpty, spins < 500 { await Task.yield(); spins += 1 }
+
+        transport.parkRequests = true
+        await ticker.tick() // the interval elapses; the poll's refresh parks mid-flight
+        spins = 0
+        while transport.parkedCount == 0, spins < 500 { await Task.yield(); spins += 1 }
+        t.expect(transport.parkedCount > 0, "the refresh should be in flight before the interval changes")
+
+        // Restarting the loop cancels the poll task — and with it the fetch
+        // running inside it, which throws URLError(.cancelled).
+        model.setAutoRefreshInterval(120)
+        spins = 0
+        while model.isRefreshing, spins < 5000 { await Task.yield(); spins += 1 }
+
+        t.expect(model.refreshError == nil,
+                 "a self-cancelled fetch is no news, not a failure: \(model.refreshError ?? "nil")")
+        if case .loaded = model.state {} else {
+            t.expect(false, "the list should stay loaded through an interval change")
+        }
+
+        model.stopPolling()
+        await ticker.tick() // release the re-parked sleep so the cancelled loop exits
     }
 
     t.suite("AppModel failure legibility")
