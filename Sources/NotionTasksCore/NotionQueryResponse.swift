@@ -27,13 +27,16 @@ public struct NotionQueryResponse: Decodable {
 
     public struct Page: Decodable {
         public let id: String
-        /// Notion's page-level `created_time` (an ISO datetime), not a property.
+        /// Notion's page-level `created_time`/`last_edited_time` (ISO datetimes),
+        /// not properties.
         let createdTime: String?
+        let lastEditedTime: String?
         public let properties: [String: Property]
 
         enum CodingKeys: String, CodingKey {
             case id
             case createdTime = "created_time"
+            case lastEditedTime = "last_edited_time"
             case properties
         }
 
@@ -49,7 +52,9 @@ public struct NotionQueryResponse: Decodable {
                 dueDate: NotionQueryResponse.date(from: properties["Due Date"]?.date?.start),
                 category: properties["Category"]?.select?.name,
                 startFrom: NotionQueryResponse.date(from: properties["Start from"]?.date?.start),
-                createdTime: NotionQueryResponse.date(from: createdTime)
+                createdTime: NotionQueryResponse.date(from: createdTime),
+                lastEditedTime: NotionQueryResponse.date(from: lastEditedTime),
+                workType: properties["WorkType"]?.select?.name
             )
         }
     }

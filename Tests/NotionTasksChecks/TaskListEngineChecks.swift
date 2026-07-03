@@ -189,4 +189,100 @@ func taskListEngineChecks(_ t: CheckRun) async {
             t.expectEqual(ids.count, 2)
         }
     }
+
+    // ---- Custom filter and sort (#6): flat, AND-combined filters, chosen sort ----
+    t.suite("TaskListEngine — Custom filter and sort")
+    do {
+        let customTasks = [
+            NotionTask(id: "s1", title: "Alpha", status: "To Do", priority: .p0,
+                       dueDate: today, category: work,
+                       createdTime: day(2026, 6, 1, cal), lastEditedTime: day(2026, 6, 25, cal),
+                       workType: "Strategy"),
+            NotionTask(id: "s2", title: "Bravo", status: "In Progress", priority: .p1,
+                       dueDate: past, category: "📝 Life admin",
+                       createdTime: day(2026, 6, 5, cal), lastEditedTime: day(2026, 6, 10, cal),
+                       workType: "Reporting/Comms"),
+            NotionTask(id: "s3", title: "Charlie", status: "Blocked", priority: .p2,
+                       dueDate: future, category: work,
+                       createdTime: day(2026, 6, 3, cal), lastEditedTime: day(2026, 6, 20, cal),
+                       workType: "Admin"),
+            NotionTask(id: "s4", title: "Delta", status: "Done", priority: nil,
+                       dueDate: nil, category: "💻 Tech & Projects",
+                       createdTime: day(2026, 5, 1, cal), lastEditedTime: day(2026, 6, 1, cal)),
+            NotionTask(id: "s5", title: "Echo", status: nil, priority: nil,
+                       dueDate: nil, category: nil,
+                       createdTime: day(2026, 6, 9, cal), lastEditedTime: day(2026, 6, 9, cal)),
+        ]
+        func ids(_ q: CustomQuery) -> [String] {
+            TaskListEngine.custom(customTasks, query: q, today: today, calendar: cal)
+                .first?.tasks.map(\.id) ?? []
+        }
+
+        await t.test("an empty query returns every task as one flat group") {
+            let groups = TaskListEngine.custom(customTasks, query: .empty, today: today, calendar: cal)
+            t.expectEqual(groups.count, 1)
+            t.expect(groups.first?.priority == nil, "custom results are a flat, headerless group")
+            t.expectEqual(groups.first?.tasks.count, 5)
+        }
+
+        await t.test("default sort is Due ascending with no-due last") {
+            // due: s2 6/20, s1 7/2, s3 8/1; s4/s5 have none → last, by title.
+            t.expectEqual(ids(.empty), ["s2", "s1", "s3", "s4", "s5"])
+        }
+
+        await t.test("Status filter keeps only the chosen statuses") {
+            t.expectEqual(ids(CustomQuery(statuses: ["To Do", "Blocked"])), ["s1", "s3"])
+        }
+
+        await t.test("Category and Priority and WorkType each filter independently") {
+            t.expectEqual(ids(CustomQuery(categories: [work])), ["s1", "s3"])
+            t.expectEqual(ids(CustomQuery(priorities: ["P0", "P1"])), ["s2", "s1"])
+            t.expectEqual(ids(CustomQuery(workTypes: ["Strategy"])), ["s1"])
+        }
+
+        await t.test("filters combine with AND") {
+            // In-progress OR to-do, AND Work category → only s1 (s2 is Life admin).
+            t.expectEqual(ids(CustomQuery(statuses: ["To Do", "In Progress"], categories: [work])), ["s1"])
+        }
+
+        await t.test("Due date predicates filter relative to today") {
+            t.expectEqual(ids(CustomQuery(dueDate: .onOrBeforeToday)), ["s2", "s1"])
+            t.expectEqual(ids(CustomQuery(dueDate: .afterToday)), ["s3"])
+            t.expectEqual(Set(ids(CustomQuery(dueDate: .isEmpty))), ["s4", "s5"])
+            t.expectEqual(Set(ids(CustomQuery(dueDate: .isPresent))), ["s1", "s2", "s3"])
+        }
+
+        await t.test("sort by Priority orders P0→P2 ascending, no-priority last") {
+            t.expectEqual(ids(CustomQuery(sortField: .priority, ascending: true)),
+                          ["s1", "s2", "s3", "s4", "s5"])
+        }
+
+        await t.test("descending flips present values but keeps missing values last") {
+            t.expectEqual(ids(CustomQuery(sortField: .priority, ascending: false)),
+                          ["s3", "s2", "s1", "s4", "s5"])
+        }
+
+        await t.test("sort by Created descending is newest-first") {
+            // created: s5 6/9, s2 6/5, s3 6/3, s1 6/1, s4 5/1.
+            t.expectEqual(ids(CustomQuery(sortField: .created, ascending: false)),
+                          ["s5", "s2", "s3", "s1", "s4"])
+        }
+
+        await t.test("sort by Last edited descending is most-recently-edited first") {
+            // edited: s1 6/25, s3 6/20, s2 6/10, s5 6/9, s4 6/1.
+            t.expectEqual(ids(CustomQuery(sortField: .lastEdited, ascending: false)),
+                          ["s1", "s3", "s2", "s5", "s4"])
+        }
+
+        await t.test("isFiltering reflects filters only, and cleared() keeps the sort") {
+            let q = CustomQuery(statuses: ["To Do"], sortField: .created, ascending: false)
+            t.expect(q.isFiltering, "a status filter counts as filtering")
+            t.expect(!CustomQuery(sortField: .created, ascending: false).isFiltering,
+                     "sort alone is not filtering")
+            let cleared = q.cleared()
+            t.expect(!cleared.isFiltering, "cleared() drops the filters")
+            t.expectEqual(cleared.sortField, .created)
+            t.expect(!cleared.ascending, "cleared() keeps the sort direction")
+        }
+    }
 }

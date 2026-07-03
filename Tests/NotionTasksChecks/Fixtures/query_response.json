@@ -42,6 +42,11 @@
           "id": "strt",
           "type": "date",
           "date": { "start": "2026-06-15", "end": null, "time_zone": null }
+        },
+        "WorkType": {
+          "id": "wtyp",
+          "type": "select",
+          "select": { "id": "w-strat", "name": "Strategy", "color": "blue" }
         }
       }
     },
@@ -86,6 +91,11 @@
           "id": "strt",
           "type": "date",
           "date": { "start": "2026-07-10", "end": null, "time_zone": null }
+        },
+        "WorkType": {
+          "id": "wtyp",
+          "type": "select",
+          "select": { "id": "w-report", "name": "Reporting/Comms", "color": "green" }
         }
       }
     },

@@ -56,9 +56,35 @@ public struct DataSourceSchema: Decodable {
     }
 
     /// The Category select option names, in schema order. Feeds the "Work"
-    /// resolution below and, later, the custom filter UI (#6).
+    /// resolution below and the custom filter UI (#6).
     public var categoryOptionNames: [String] {
         properties["Category"]?.select?.options.map(\.name) ?? []
+    }
+
+    /// The Status option names, in schema order (all of them, open and complete
+    /// alike) — the custom filter (#6) can filter on any status.
+    public var statusOptionNames: [String] {
+        properties.values.first { $0.type == "status" }?.status?.options.map(\.name) ?? []
+    }
+
+    /// The Priority select option names, in schema order (#6).
+    public var priorityOptionNames: [String] {
+        properties["Priority"]?.select?.options.map(\.name) ?? []
+    }
+
+    /// The WorkType select option names, in schema order (#6).
+    public var workTypeOptionNames: [String] {
+        properties["WorkType"]?.select?.options.map(\.name) ?? []
+    }
+
+    /// Everything the custom filter UI offers, read wholesale from the schema so
+    /// a renamed or newly-added option shows up with no code change (#6).
+    public var filterOptions: SchemaOptions {
+        SchemaOptions(
+            statuses: statusOptionNames,
+            categories: categoryOptionNames,
+            priorities: priorityOptionNames,
+            workTypes: workTypeOptionNames)
     }
 
     /// The Category option that represents work. Matched by containing "work"

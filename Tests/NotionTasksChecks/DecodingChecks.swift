@@ -89,4 +89,21 @@ func decodingChecks(_ t: CheckRun) async {
         let created1 = try require(tasks[1].createdTime)
         t.expect(created < created1, "task[0] should be created before task[1]")
     }
+
+    await t.test("last edited time decodes from the page's last_edited_time") {
+        let tasks = try JSONDecoder().decode(
+            NotionQueryResponse.self, from: try fixtureData("query_response")).tasks
+        // tasks[0] last edited 2026-06-20; tasks[1] 2026-06-18 → [0] is newer.
+        let edited0 = try require(tasks[0].lastEditedTime)
+        let edited1 = try require(tasks[1].lastEditedTime)
+        t.expect(edited0 > edited1, "task[0] should be edited more recently than task[1]")
+    }
+
+    await t.test("WorkType decodes to the select name, or nil when absent") {
+        let tasks = try JSONDecoder().decode(
+            NotionQueryResponse.self, from: try fixtureData("query_response")).tasks
+        t.expect(tasks[0].workType == "Strategy", "tasks[0].workType was \(tasks[0].workType ?? "nil")")
+        t.expect(tasks[1].workType == "Reporting/Comms", "tasks[1].workType was \(tasks[1].workType ?? "nil")")
+        t.expect(tasks[3].workType == nil, "tasks[3] has no WorkType, should be nil")
+    }
 }

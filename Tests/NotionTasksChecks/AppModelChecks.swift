@@ -182,6 +182,49 @@ func appModelChecks(_ t: CheckRun) async {
         t.expectEqual(home.first?.tasks.map(\.title), ["Chase vendor on renewal quote"])
     }
 
+    await t.test("filter option lists are derived from the fetched schema") {
+        let store = InMemoryTokenStore()
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
+        await model.submit(token: "ntn_good")
+
+        let options = model.schemaOptions
+        t.expect(options.statuses.contains("Done"), "custom filter can pick any status, including Done")
+        t.expectEqual(options.workTypes.count, 9)
+        t.expect(options.workTypes.contains("PIVOT"), "WorkType options come from the schema")
+        t.expect(options.categories.contains("👨🏻‍💻 Work"), "categories come from the schema")
+    }
+
+    await t.test("entering a custom view filters the loaded tasks, and a preset restores it") {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "Europe/London")!
+        let today = cal.date(from: DateComponents(year: 2026, month: 7, day: 15, hour: 12))!
+
+        let store = InMemoryTokenStore()
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
+        await model.submit(token: "ntn_good")
+
+        t.expect(!model.isCustom, "loads into a preset, not a custom view")
+
+        // Custom: WorkType == Strategy → only the one Strategy task, flat.
+        model.enterCustom()
+        model.updateCustom(CustomQuery(workTypes: ["Strategy"]))
+        t.expect(model.isCustom, "should be in the custom view")
+        let custom = model.groups(today: today, calendar: cal)
+        t.expectEqual(custom.count, 1)
+        t.expectEqual(custom.first?.tasks.map(\.title), ["Wire up the menu bar read path"])
+
+        // Selecting a preset leaves custom mode and restores the preset grouping.
+        model.selectPreset(.pivotalPriorities)
+        t.expect(!model.isCustom, "picking a preset should leave the custom view")
+        t.expectEqual(model.groups(today: today, calendar: cal).map(\.priority), [.p0, .p1])
+    }
+
     await t.test("a failed write leaves the row unchanged and surfaces an error") {
         let store = InMemoryTokenStore()
         let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)

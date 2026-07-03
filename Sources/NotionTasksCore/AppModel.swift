@@ -21,6 +21,13 @@ public final class AppModel: ObservableObject {
     /// The active preset. Published so switching it re-renders the list from the
     /// tasks already in hand — no re-fetch (#5). Defaults to Pivotal Priorities.
     @Published public private(set) var preset: Preset = .pivotalPriorities
+    /// Whether a custom filter/sort view is active instead of a preset (#6).
+    @Published public private(set) var isCustom = false
+    /// The user-composed filter/sort shown while `isCustom` (#6).
+    @Published public private(set) var customQuery: CustomQuery = .empty
+    /// The filter option lists offered by the custom view, derived from the
+    /// fetched schema (#6). Falls back to constants until the schema loads.
+    @Published public private(set) var schemaOptions: SchemaOptions = .fallback
 
     private let tokenStore: TokenStore
     private let makeClient: (String) -> NotionClient
@@ -88,18 +95,40 @@ public final class AppModel: ObservableObject {
         state = .needsToken
     }
 
-    /// Switch the visible preset. Changing `preset` republishes, so the view
-    /// recomputes `groups()` from the tasks already loaded — no re-fetch (#5).
+    /// Switch to a built-in preset. Leaves the custom view if it was active.
+    /// Changing this republishes, so the view recomputes `groups()` from the
+    /// tasks already loaded — no re-fetch (#5).
     public func selectPreset(_ preset: Preset) {
         self.preset = preset
+        isCustom = false
     }
 
-    /// The task list for the active preset: open tasks filtered/sorted/grouped
-    /// per the preset (#4/#5). Recomputed from the raw `.loaded` tasks, so both a
-    /// status change and a preset switch reflow it for free. `today` is
-    /// injectable for tests; the app passes the real date.
+    /// Switch to the custom filter/sort view, keeping whatever query was last
+    /// composed (#6).
+    public func enterCustom() {
+        isCustom = true
+    }
+
+    /// Replace the custom filter/sort. Republishes so the list reflows at once.
+    public func updateCustom(_ query: CustomQuery) {
+        customQuery = query
+    }
+
+    /// The label for the active view: the preset's title, or "Custom" (#6).
+    public var activeTitle: String { isCustom ? "Custom" : preset.title }
+
+    /// Whether the active view groups by priority. Custom views are always flat.
+    public var isGrouped: Bool { isCustom ? false : preset.isGrouped }
+
+    /// The task list for the active view: a preset (#4/#5) or the custom
+    /// filter/sort (#6). Recomputed from the raw `.loaded` tasks, so a status
+    /// change, a preset switch, or a query edit all reflow it for free. `today`
+    /// is injectable for tests; the app passes the real date.
     public func groups(today: Date = Date(), calendar: Calendar = .current) -> [TaskGroup] {
         guard case .loaded(let tasks) = state else { return [] }
+        if isCustom {
+            return TaskListEngine.custom(tasks, query: customQuery, today: today, calendar: calendar)
+        }
         return TaskListEngine.groups(
             for: preset, tasks, openStatuses: openStatuses, workCategory: workCategory,
             personalCategories: personalCategories, today: today, calendar: calendar)
@@ -117,6 +146,7 @@ public final class AppModel: ObservableObject {
                 if let work = schema.workCategoryName { workCategory = work }
                 let personal = schema.personalCategoryNames
                 if !personal.isEmpty { personalCategories = Set(personal) }
+                schemaOptions = schema.filterOptions
             }
             let tasks = try await client.fetchTasks()
             state = .loaded(tasks)

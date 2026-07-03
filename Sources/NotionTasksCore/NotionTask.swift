@@ -35,8 +35,13 @@ public struct NotionTask: Identifiable, Equatable {
     /// priority views later; decoded here so it's ready.
     public let startFrom: Date?
     /// The page's Notion `created_time`. Drives the Created sort in the
-    /// "All open" and "Late or due today" presets (#5).
+    /// "All open" and "Late or due today" presets (#5) and the custom sort (#6).
     public let createdTime: Date?
+    /// The page's Notion `last_edited_time`. A custom-sort field (#6).
+    public let lastEditedTime: Date?
+    /// The WorkType select-option name (e.g. "Strategy", "PIVOT"). A custom
+    /// filter field (#6); the values come from the schema, not a fixed set.
+    public let workType: String?
 
     public init(
         id: String,
@@ -46,7 +51,9 @@ public struct NotionTask: Identifiable, Equatable {
         dueDate: Date? = nil,
         category: String? = nil,
         startFrom: Date? = nil,
-        createdTime: Date? = nil
+        createdTime: Date? = nil,
+        lastEditedTime: Date? = nil,
+        workType: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -56,6 +63,8 @@ public struct NotionTask: Identifiable, Equatable {
         self.category = category
         self.startFrom = startFrom
         self.createdTime = createdTime
+        self.lastEditedTime = lastEditedTime
+        self.workType = workType
     }
 
     /// A copy with a new status, keeping every other field. Used by the write
@@ -64,7 +73,7 @@ public struct NotionTask: Identifiable, Equatable {
         NotionTask(
             id: id, title: title, status: newStatus, priority: priority,
             dueDate: dueDate, category: category, startFrom: startFrom,
-            createdTime: createdTime)
+            createdTime: createdTime, lastEditedTime: lastEditedTime, workType: workType)
     }
 
     /// The due date rendered relative to `now`: "Overdue" for a past day,

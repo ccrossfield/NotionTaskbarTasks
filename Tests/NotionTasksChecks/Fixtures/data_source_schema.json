@@ -46,6 +46,24 @@
           { "id": "c-fun", "name": "🎉 Fun admin", "color": "yellow" }
         ]
       }
+    },
+    "WorkType": {
+      "id": "wtyp",
+      "name": "WorkType",
+      "type": "select",
+      "select": {
+        "options": [
+          { "id": "w-strat", "name": "Strategy", "color": "blue" },
+          { "id": "w-report", "name": "Reporting/Comms", "color": "green" },
+          { "id": "w-team", "name": "Team", "color": "orange" },
+          { "id": "w-horizon", "name": "HORIZON", "color": "purple" },
+          { "id": "w-podium", "name": "PODIUM", "color": "pink" },
+          { "id": "w-pi", "name": "PI", "color": "red" },
+          { "id": "w-piston", "name": "PISTON", "color": "yellow" },
+          { "id": "w-pivot", "name": "PIVOT", "color": "gray" },
+          { "id": "w-admin", "name": "Admin", "color": "brown" }
+        ]
+      }
     }
   }
 }

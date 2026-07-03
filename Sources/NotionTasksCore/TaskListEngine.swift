@@ -108,6 +108,77 @@ public enum TaskListEngine {
         return flatGroup(visible.sorted(by: byCreatedDescending))
     }
 
+    /// A custom, user-composed view (#6): the tasks matching every active filter
+    /// (filters combine with AND; an empty option set means "any"), as a single
+    /// flat group sorted by the chosen field and direction. Missing sort values
+    /// sort last in both directions; the title is the stable final tie-break.
+    public static func custom(
+        _ tasks: [NotionTask],
+        query: CustomQuery,
+        today: Date,
+        calendar: Calendar = .current
+    ) -> [TaskGroup] {
+        let startOfToday = calendar.startOfDay(for: today)
+        let filtered = tasks.filter { task in
+            matches(query.statuses, task.status)
+                && matches(query.categories, task.category)
+                && matches(query.priorities, task.priority?.rawValue)
+                && matches(query.workTypes, task.workType)
+                && matches(query.dueDate, task.dueDate, startOfToday, calendar)
+                && matches(query.startFrom, task.startFrom, startOfToday, calendar)
+        }
+        return flatGroup(filtered.sorted(by: comparator(for: query)))
+    }
+
+    /// A select filter matches when it's empty ("any") or the task's value is in
+    /// the allowed set. A task with no value matches only the "any" case.
+    private static func matches(_ allowed: Set<String>, _ value: String?) -> Bool {
+        guard !allowed.isEmpty else { return true }
+        guard let value else { return false }
+        return allowed.contains(value)
+    }
+
+    /// A date filter evaluated relative to the start of today.
+    private static func matches(
+        _ filter: DateFilter, _ date: Date?, _ startOfToday: Date, _ calendar: Calendar
+    ) -> Bool {
+        switch filter {
+        case .any: return true
+        case .isEmpty: return date == nil
+        case .isPresent: return date != nil
+        case .onOrBeforeToday:
+            guard let date else { return false }
+            return calendar.startOfDay(for: date) <= startOfToday
+        case .afterToday:
+            guard let date else { return false }
+            return calendar.startOfDay(for: date) > startOfToday
+        }
+    }
+
+    /// The comparator for a custom sort: orders by the chosen field/direction,
+    /// missing values last (both directions), title as the stable tie-break.
+    private static func comparator(for query: CustomQuery) -> (NotionTask, NotionTask) -> Bool {
+        let ascending = query.ascending
+        func ordered<T: Comparable>(_ a: T?, _ b: T?) -> Bool? {
+            switch (a, b) {
+            case let (x?, y?) where x != y: return ascending ? x < y : x > y
+            case (_?, nil): return true   // a present, b missing → a first (missing last)
+            case (nil, _?): return false
+            default: return nil           // equal, or both missing → tie
+            }
+        }
+        return { a, b in
+            let decided: Bool?
+            switch query.sortField {
+            case .dueDate: decided = ordered(a.dueDate, b.dueDate)
+            case .priority: decided = ordered(a.priority?.rank, b.priority?.rank)
+            case .created: decided = ordered(a.createdTime, b.createdTime)
+            case .lastEdited: decided = ordered(a.lastEditedTime, b.lastEditedTime)
+            }
+            return decided ?? (a.title < b.title)
+        }
+    }
+
     // MARK: - Shared building blocks
 
     /// The open + category + Start-from filter that Pivotal and Home share,

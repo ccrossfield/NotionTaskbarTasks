@@ -31,6 +31,9 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 8)
             case .loaded:
+                if model.isCustom {
+                    customControls
+                }
                 taskList
             case .failed(let message):
                 failure(message)
@@ -50,25 +53,35 @@ struct ContentView: View {
         .task { await model.start() }
     }
 
-    /// The preset picker doubles as the panel title: it shows the active preset
-    /// and switches on selection (#5). Switching republishes `model.preset`, so
-    /// the list below reflows immediately with no manual refresh.
+    /// The view picker doubles as the panel title: it shows the active view and
+    /// switches on selection — the four presets (#5) plus a Custom entry (#6).
+    /// Switching republishes, so the list below reflows with no manual refresh.
     private var header: some View {
         Menu {
             ForEach(Preset.allCases) { preset in
                 Button {
                     model.selectPreset(preset)
                 } label: {
-                    if preset == model.preset {
+                    if !model.isCustom && preset == model.preset {
                         Label(preset.title, systemImage: "checkmark")
                     } else {
                         Text(preset.title)
                     }
                 }
             }
+            Divider()
+            Button {
+                model.enterCustom()
+            } label: {
+                if model.isCustom {
+                    Label("Custom…", systemImage: "checkmark")
+                } else {
+                    Text("Custom…")
+                }
+            }
         } label: {
             HStack(spacing: 4) {
-                Text(model.preset.title).font(.headline)
+                Text(model.activeTitle).font(.headline)
                 Image(systemName: "chevron.down").font(.caption2)
             }
         }
@@ -97,10 +110,13 @@ struct ContentView: View {
     /// priority isn't otherwise shown.
     private var taskList: some View {
         let groups = model.groups()
-        let grouped = model.preset.isGrouped
+        let grouped = model.isGrouped
+        let emptyMessage = model.isCustom
+            ? "No tasks match this filter."
+            : "Nothing in \(model.activeTitle) right now."
         return Group {
             if groups.isEmpty {
-                Text("Nothing in \(model.preset.title) right now.")
+                Text(emptyMessage)
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
@@ -125,6 +141,114 @@ struct ContentView: View {
                 }
                 .frame(height: min(listHeight, maxListHeight))
                 .onPreferenceChange(ListHeightKey.self) { listHeight = $0 }
+            }
+        }
+    }
+
+    /// The custom view's controls (#6): one "Filter" menu (with a submenu per
+    /// field) and one "Sort" menu. Collapsing everything into two menus keeps the
+    /// narrow menu-bar panel uncluttered. Every option list is schema-derived.
+    private var customControls: some View {
+        let query = model.customQuery
+        let options = model.schemaOptions
+        return HStack(spacing: 10) {
+            Menu {
+                filterSubmenu("Status", options: options.statuses, selected: query.statuses) {
+                    var q = query; q.statuses = $0; model.updateCustom(q)
+                }
+                filterSubmenu("Category", options: options.categories, selected: query.categories) {
+                    var q = query; q.categories = $0; model.updateCustom(q)
+                }
+                filterSubmenu("Priority", options: options.priorities, selected: query.priorities) {
+                    var q = query; q.priorities = $0; model.updateCustom(q)
+                }
+                filterSubmenu("WorkType", options: options.workTypes, selected: query.workTypes) {
+                    var q = query; q.workTypes = $0; model.updateCustom(q)
+                }
+                dateSubmenu("Due date", value: query.dueDate) {
+                    var q = query; q.dueDate = $0; model.updateCustom(q)
+                }
+                dateSubmenu("Start from", value: query.startFrom) {
+                    var q = query; q.startFrom = $0; model.updateCustom(q)
+                }
+                Divider()
+                Button("Clear filters") { model.updateCustom(query.cleared()) }
+                    .disabled(!query.isFiltering)
+            } label: {
+                Label("Filter", systemImage: query.isFiltering
+                      ? "line.3.horizontal.decrease.circle.fill"
+                      : "line.3.horizontal.decrease.circle")
+            }
+
+            Menu {
+                ForEach(SortField.allCases, id: \.self) { field in
+                    Button {
+                        var q = query; q.sortField = field; model.updateCustom(q)
+                    } label: {
+                        if field == query.sortField {
+                            Label(field.title, systemImage: "checkmark")
+                        } else {
+                            Text(field.title)
+                        }
+                    }
+                }
+                Divider()
+                Button {
+                    var q = query; q.ascending.toggle(); model.updateCustom(q)
+                } label: {
+                    Label(query.ascending ? "Ascending" : "Descending",
+                          systemImage: query.ascending ? "arrow.up" : "arrow.down")
+                }
+            } label: {
+                Label("Sort: \(query.sortField.title)",
+                      systemImage: query.ascending ? "arrow.up" : "arrow.down")
+            }
+
+            Spacer()
+        }
+        .font(.caption)
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+    }
+
+    /// A multi-select filter submenu: each schema option toggles in/out of the
+    /// set; the label carries the count when any are chosen.
+    private func filterSubmenu(
+        _ title: String, options: [String], selected: Set<String>,
+        update: @escaping (Set<String>) -> Void
+    ) -> some View {
+        Menu(selected.isEmpty ? title : "\(title) (\(selected.count))") {
+            ForEach(options, id: \.self) { option in
+                Button {
+                    var next = selected
+                    if next.contains(option) { next.remove(option) } else { next.insert(option) }
+                    update(next)
+                } label: {
+                    if selected.contains(option) {
+                        Label(option, systemImage: "checkmark")
+                    } else {
+                        Text(option)
+                    }
+                }
+            }
+        }
+    }
+
+    /// A single-select date-filter submenu (Any / Today or earlier / … ).
+    private func dateSubmenu(
+        _ title: String, value: DateFilter, update: @escaping (DateFilter) -> Void
+    ) -> some View {
+        Menu("\(title): \(value.title)") {
+            ForEach(DateFilter.allCases, id: \.self) { option in
+                Button {
+                    update(option)
+                } label: {
+                    if option == value {
+                        Label(option.title, systemImage: "checkmark")
+                    } else {
+                        Text(option.title)
+                    }
+                }
             }
         }
     }
