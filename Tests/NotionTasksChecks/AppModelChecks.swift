@@ -143,15 +143,18 @@ actor PatchGateHTTPClient: HTTPClient {
 
 /// Routes the schema GET vs the query POST to different canned bodies, so a full
 /// `AppModel.load` (which fetches both) can be exercised through the seam.
+/// `schemaStatusCode` lets a check fail the schema route while queries succeed (#14).
 final class RoutingStubHTTPClient: HTTPClient {
     let schema: Data
     var query: Data
+    var schemaStatusCode = 200
     init(schema: Data, query: Data) { self.schema = schema; self.query = query }
 
     func data(for request: URLRequest) async throws -> (Data, URLResponse) {
         let isQuery = request.url?.absoluteString.hasSuffix("/query") ?? false
         let response = HTTPURLResponse(
-            url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            url: request.url!, statusCode: isQuery ? 200 : schemaStatusCode,
+            httpVersion: nil, headerFields: nil)!
         return (isQuery ? query : schema, response)
     }
 }
@@ -1067,6 +1070,106 @@ func appModelChecks(_ t: CheckRun) async {
                  "task A's completed status was clobbered by task B's write landing")
         t.expect(tasks.first { $0.id == secondTaskID }?.status == "Done",
                  "task B should show Done")
+    }
+
+    t.suite("AppModel schema-fetch failure (#14)")
+
+    await t.test("schema route fails, query succeeds: the list loads and a warning is published") {
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        stub.schemaStatusCode = 500
+        let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
+
+        await model.start()
+
+        if case .loaded(let tasks) = model.state {
+            t.expectEqual(tasks.count, 5)
+        } else {
+            t.expect(false, "expected .loaded despite the schema failure, got \(model.state)")
+        }
+        t.expect(model.schemaWarning != nil, "a failed schema fetch must be visible, not silent")
+    }
+
+    await t.test("the warning clears when a later load fetches the schema, and returns if it fails again") {
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        stub.schemaStatusCode = 500
+        let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
+
+        await model.start()
+        t.expect(model.schemaWarning != nil, "precondition: the warning is up after a schema failure")
+
+        stub.schemaStatusCode = 200
+        await model.refresh()
+        t.expect(model.schemaWarning == nil, "a successful schema fetch should clear the warning")
+
+        stub.schemaStatusCode = 500
+        await model.refresh()
+        t.expect(model.schemaWarning != nil, "the warning returns when the schema fails again")
+    }
+
+    await t.test("schema failure plus task failure shows only the task-fetch error states") {
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: Data("not json".utf8)) // the task fetch fails too
+        stub.schemaStatusCode = 500
+        let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
+
+        await model.start()
+
+        if case .failed = model.state {} else {
+            t.expect(false, "expected the normal task-fetch failure, got \(model.state)")
+        }
+        t.expect(model.schemaWarning == nil, "the task-fetch error wins - no second message")
+    }
+
+    await t.test("with a snapshot present, a schema failure filters with the snapshot's facts, not the fallbacks") {
+        // "Todo" exists only in the snapshot's facts — it is not in
+        // NotionConfig.fallbackOpenStatuses. Reverting to the fallbacks on a
+        // schema failure would render every preset empty (the issue's original
+        // failure scenario: renamed statuses + a schema hiccup); the
+        // last-known-good facts keep the task visible.
+        let renamedQueryJSON = Data("""
+        {
+          "object": "list",
+          "results": [{
+            "id": "todo1",
+            "properties": {
+              "Task": { "type": "title", "title": [{ "plain_text": "Renamed status task" }] },
+              "Status": { "id": "st", "type": "status", "status": { "name": "Todo" } }
+            }
+          }],
+          "has_more": false,
+          "next_cursor": null
+        }
+        """.utf8)
+        let snapshot = CachedSnapshot(
+            tasks: [NotionTask(id: "old", title: "Old cached task", status: "Todo")],
+            openStatuses: ["Todo"],
+            workCategory: "👨🏻‍💻 Work",
+            personalCategories: ["📝 Life admin"],
+            schemaOptions: SchemaOptions(statuses: ["Todo"], categories: [],
+                                         priorities: [], workTypes: []),
+            fetchedAt: Date(timeIntervalSince1970: 1_751_500_000))
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let cache = InMemoryTaskCache(seed: snapshot)
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"), query: renamedQueryJSON)
+        stub.schemaStatusCode = 500
+        let model = AppModel(tokenStore: store, cache: cache) {
+            NotionClient(dataSourceID: ds, token: $0, http: stub)
+        }
+
+        await model.start()
+        model.selectPreset(.allOpen)
+
+        t.expectEqual(model.groups().flatMap(\.tasks).map(\.id), ["todo1"])
+        t.expect(model.schemaWarning != nil, "the staleness is signalled while the list stays visible")
     }
 
     t.suite("AppModel collapsible groups")

@@ -53,6 +53,15 @@ struct ContentView: View {
                     .foregroundStyle(.red)
             }
 
+            // The schema didn't load (#14): the list stays visible, filtered
+            // with the last-known-good facts; this says the filter options and
+            // grouping may be stale. Amber, not red — the load itself worked.
+            if let schemaWarning = model.schemaWarning {
+                Text(schemaWarning)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+
         }
         .padding(12)
         .frame(width: 340)

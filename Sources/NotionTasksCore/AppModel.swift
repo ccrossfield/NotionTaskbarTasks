@@ -22,6 +22,12 @@ public final class AppModel: ObservableObject {
     /// the list stays visible (stale beats blank) and this says why it's stale.
     /// Cleared when the next refresh starts.
     @Published public private(set) var refreshError: String?
+    /// Set when the schema fetch fails but the task fetch succeeds (#14): the
+    /// list renders with the last-known-good schema facts and this says the
+    /// filters/options may be stale. Cleared by the next load whose schema
+    /// fetch succeeds. When the task fetch fails too, its error states win and
+    /// this stays unset.
+    @Published public private(set) var schemaWarning: String?
     /// When the tasks on screen were fetched from Notion. For a cached snapshot
     /// this is the snapshot's fetch time — the honest age of what's shown.
     @Published public private(set) var lastRefreshed: Date?
@@ -62,9 +68,12 @@ public final class AppModel: ObservableObject {
     private let pollSleep: @Sendable (TimeInterval) async -> Void
     private var pollTask: Task<Void, Never>?
 
-    /// Schema-derived facts for the preset filters (ADR-0001). Set from the live
-    /// schema on load; the fallbacks apply only if that fetch fails, so the list
-    /// never silently empties.
+    /// Schema-derived facts for the preset filters (ADR-0001). The compile-time
+    /// fallbacks are initial values only: they are overwritten by a cached
+    /// snapshot or a successful schema fetch and never reverted to. On a schema
+    /// fetch failure the last-known-good facts stay in use — which can still
+    /// misfilter against renamed statuses, so `schemaWarning` says the schema
+    /// didn't load rather than letting that pass silently (#14).
     private var openStatuses: Set<String> = NotionConfig.fallbackOpenStatuses
     private var workCategory: String = NotionConfig.fallbackWorkCategory
     private var personalCategories: Set<String> = NotionConfig.fallbackPersonalCategories
@@ -338,17 +347,27 @@ public final class AppModel: ObservableObject {
         let client = makeClient(token)
         do {
             // Schema first, so the open set is derived from the live schema
-            // (ADR-0001). Best-effort: a schema hiccup falls back to the
-            // defaults rather than failing the whole load.
-            if let schema = try? await client.fetchSchema() {
+            // (ADR-0001). A schema hiccup doesn't fail the load — the
+            // last-known-good facts keep filtering — but it must not pass
+            // silently either (#14). The warning is published only once the
+            // task fetch has succeeded: if that fails too, its error states
+            // are the whole story.
+            var schemaFailed = false
+            do {
+                let schema = try await client.fetchSchema()
                 openStatuses = schema.openStatusNames
                 if let work = schema.workCategoryName { workCategory = work }
                 let personal = schema.personalCategoryNames
                 if !personal.isEmpty { personalCategories = Set(personal) }
                 schemaOptions = schema.filterOptions
+            } catch {
+                schemaFailed = true
             }
             let tasks = try await client.fetchTasks()
             state = .loaded(tasks)
+            schemaWarning = schemaFailed
+                ? "Couldn't load the filter options from Notion - filters and grouping may be out of date."
+                : nil
             lastRefreshed = now()
             cache?.save(CachedSnapshot(
                 tasks: tasks, openStatuses: openStatuses, workCategory: workCategory,
