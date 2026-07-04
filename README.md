@@ -6,9 +6,12 @@ GitHub issue #1 and the API decisions in `docs/adr/0001-notion-api-access.md`.
 
 ## Screenshots
 
+Notion Tasks lives in the macOS menu bar as a checklist icon with a count of
+tasks that are late or due today. Click it to drop the task panel:
+
 <p align="center">
-  <img src="docs/images/task-list.png" width="360"
-       alt="Notion Tasks menu bar popover showing tasks grouped by priority (P0/P1/P2) with colour-coded due dates and a per-row status menu">
+  <img src="docs/images/task-list.png" width="440"
+       alt="The Notion Tasks menu bar item — a checklist icon with an attention count — with its panel open below, showing tasks grouped by priority (P0/P1/P2) with colour-coded due dates and a per-row status menu">
 </p>
 
 <table>
