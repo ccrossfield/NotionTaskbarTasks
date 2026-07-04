@@ -122,32 +122,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             .sink { [weak self] _ in self?.updateBadge() }
             .store(in: &cancellables)
 
-        // Esc dismisses the panel like a menu — except an open composer
-        // absorbs the first Esc, closing the draft instead (#22). This
-        // monitor sees the key before the responder chain; cancelOperation
-        // (via `onCancel`) covers the routes that bypass it, e.g. ⌘-period.
+        // Panel key handling seen before the responder chain. Esc dismisses the
+        // panel like a menu — except an open rename/composer/search absorbs the
+        // first Esc, closing that instead (#22/#28/#32). ⌘F opens the search row
+        // (#32). cancelOperation (via `onCancel`) covers the Esc routes that
+        // bypass this, e.g. ⌘-period.
         escMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard event.keyCode == 53, let self, let panel = self.panel, panel.isVisible else {
-                return event
+            guard let self, let panel = self.panel, panel.isVisible else { return event }
+            // ⌘F (keyCode 3), command only: reveal and focus the search row.
+            if event.keyCode == 3,
+               event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command {
+                self.model.openSearch()
+                return nil
             }
-            if !self.handleCancel() {
-                panel.close()
+            if event.keyCode == 53 { // Esc
+                if !self.handleCancel() { panel.close() }
+                return nil
             }
-            return nil
+            return event
         }
     }
 
     /// One cancel policy for both Esc routes: an inline rename absorbs the
-    /// first Esc (cancelling the edit, #28), then an open composer (#22);
-    /// otherwise the panel closes.
+    /// first Esc (cancelling the edit, #28), then an open composer (#22), then
+    /// an open search row (#32); otherwise the panel closes. Composer and search
+    /// are mutually exclusive, so at most one of those two ever fires.
     private func handleCancel() -> Bool {
         if model.editingTaskID != nil {
             model.cancelEditing()
             return true
         }
-        guard model.isComposing else { return false }
-        model.closeComposer()
-        return true
+        if model.isComposing {
+            model.closeComposer()
+            return true
+        }
+        if model.isSearching {
+            model.closeSearch()
+            return true
+        }
+        return false
     }
 
     /// The count beside the icon (#10): open tasks late or due today.
@@ -281,6 +294,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // the field is torn down, so the edit isn't lost (#28). Esc has
         // already cleared the edit via handleCancel, so this is a no-op there.
         model.commitEditing()
+        // A dismissed panel starts clean next open: drop any search (#32), so
+        // reopening never shows a stale filter hiding most tasks.
+        model.closeSearch()
         statusItem?.button?.highlight(false)
         if let outsideClickMonitor {
             NSEvent.removeMonitor(outsideClickMonitor)

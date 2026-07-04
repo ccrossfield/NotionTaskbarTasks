@@ -355,4 +355,48 @@ func taskListEngineChecks(_ t: CheckRun) async {
             t.expect(!cleared.ascending, "cleared() keeps the sort direction")
         }
     }
+
+    // ---- Header search (#32): case/diacritic-insensitive, whitespace-split AND over titles ----
+    t.suite("TaskListEngine — search")
+    do {
+        let searchTasks = [
+            NotionTask(id: "milk", title: "Buy oat milk", status: "To Do"),
+            NotionTask(id: "cafe", title: "Meet Ana at the Café", status: "To Do"),
+            NotionTask(id: "report", title: "Draft the Q3 report", status: "In Progress"),
+            NotionTask(id: "MILK2", title: "Return the MILK carton", status: "To Do"),
+        ]
+        func ids(_ q: String) -> [String] {
+            TaskListEngine.search(searchTasks, matching: q).map(\.id)
+        }
+
+        await t.test("an empty or whitespace-only query matches every task") {
+            t.expectEqual(TaskListEngine.search(searchTasks, matching: "").count, 4)
+            t.expectEqual(TaskListEngine.search(searchTasks, matching: "   ").count, 4)
+        }
+
+        await t.test("a single term matches case-insensitively, as a substring") {
+            t.expectEqual(Set(ids("milk")), ["milk", "MILK2"])
+            t.expectEqual(Set(ids("MILK")), ["milk", "MILK2"])
+            t.expectEqual(ids("report"), ["report"]) // substring of "Q3 report"
+        }
+
+        await t.test("matching is diacritic-insensitive both ways") {
+            t.expectEqual(ids("cafe"), ["cafe"])  // unaccented query, accented title
+            t.expectEqual(ids("café"), ["cafe"])  // accented query too
+        }
+
+        await t.test("multiple terms must all appear, in any order (AND)") {
+            t.expectEqual(ids("milk buy"), ["milk"])  // both terms, reversed order
+            t.expectEqual(ids("oat milk"), ["milk"])
+            t.expect(ids("milk report").isEmpty, "no title holds both 'milk' and 'report'")
+        }
+
+        await t.test("a term matching nothing yields no results") {
+            t.expect(ids("zzz").isEmpty, "an unmatched term returns empty")
+        }
+
+        await t.test("matches keep the input order") {
+            t.expectEqual(ids("milk"), ["milk", "MILK2"])
+        }
+    }
 }

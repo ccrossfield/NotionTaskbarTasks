@@ -13,6 +13,8 @@ struct ContentView: View {
     /// Keyboard focus for the inline rename field (#28). Only one row edits at
     /// a time (the model holds a single `editingTaskID`), so one flag suffices.
     @FocusState private var editingFocused: Bool
+    /// Keyboard focus for the header search field (#32).
+    @FocusState private var searchFocused: Bool
 
     /// Fixed height for the loaded content region (controls + list). The
     /// MenuBarExtra window doesn't reliably resize to changing content, so a
@@ -26,6 +28,7 @@ struct ContentView: View {
                 Spacer()
                 staleBadge
                 addButton
+                searchButton
                 refreshButton
                 settingsMenu
             }
@@ -41,6 +44,9 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     if model.isComposing {
                         composer
+                    }
+                    if model.isSearching {
+                        searchField
                     }
                     if let notice = model.createNotice {
                         createNoticeText(notice)
@@ -184,6 +190,72 @@ struct ContentView: View {
             .buttonStyle(.plain)
             .help("New task")
             .accessibilityLabel("New task")
+        }
+    }
+
+    /// Search (#32): a magnifying glass beside the +, shown only with a list
+    /// loaded — there's nothing to search on the other screens. It toggles the
+    /// search row and tints while that row is open, so the state reads at a
+    /// glance. Opening it collapses the composer (they share the row below the
+    /// header); the model enforces that.
+    @ViewBuilder
+    private var searchButton: some View {
+        if case .loaded = model.state {
+            Button {
+                model.toggleSearch()
+            } label: {
+                Image(systemName: "magnifyingglass")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(model.isSearching ? Color.accentColor : Color.primary)
+            .help("Search tasks")
+            .accessibilityLabel("Search tasks")
+        }
+    }
+
+    /// The search row (#32): a title filter over the active view, inline below
+    /// the header like the composer. Auto-focused on open; live-filters as you
+    /// type (the field writes straight to the model, which reflows `groups()`).
+    /// The trailing ✕ clears without closing; Esc closes (via the shell's Esc
+    /// monitor, as the rename field does). Sits in the fixed-height loaded
+    /// region, so opening it never resizes the panel.
+    private var searchField: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextField("Search tasks", text: Binding(
+                    get: { model.searchText },
+                    set: { model.setSearch($0) }))
+                    .textFieldStyle(.plain)
+                    .focused($searchFocused)
+                    .onAppear {
+                        // Deferred a tick so the field is in the hierarchy
+                        // before it takes key focus (as the composer does).
+                        DispatchQueue.main.async { searchFocused = true }
+                    }
+                if !model.searchText.isEmpty {
+                    Button {
+                        model.setSearch("")
+                        DispatchQueue.main.async { searchFocused = true }
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear search")
+                    .accessibilityLabel("Clear search")
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color(nsColor: .textBackgroundColor))
+                    .overlay(RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.secondary.opacity(0.25))))
+            Divider()
         }
     }
 
@@ -397,9 +469,6 @@ struct ContentView: View {
     private var taskList: some View {
         let groups = model.groups()
         let grouped = model.isGrouped
-        let emptyMessage = model.isCustom
-            ? "No tasks match this filter."
-            : "Nothing in \(model.activeTitle) right now."
         // Always scroll inside the fixed region set in `body`. The MenuBarExtra
         // window doesn't reliably resize to changing content, so a self-sizing
         // list gets clipped by a too-small window and its lower rows vanish. A
@@ -407,9 +476,7 @@ struct ContentView: View {
         // reachable — visible for short lists, scrollable for long ones.
         return Group {
             if groups.isEmpty {
-                Text(emptyMessage)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                emptyState
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             } else {
                 ScrollView {
@@ -421,9 +488,53 @@ struct ContentView: View {
         }
     }
 
+    /// The empty-list copy. A search with no matches is the case that matters
+    /// (#32): in a focused view it offers a one-tap widen to All open — the
+    /// query carries over, so this is the discoverable route to find-anywhere
+    /// and the answer to "did I delete that task?". At All open there's nowhere
+    /// wider, so it just says nothing matched. With no search active it's the
+    /// plain per-view empty copy.
+    @ViewBuilder
+    private var emptyState: some View {
+        let query = model.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if query.isEmpty {
+            Text(model.isCustom
+                 ? "No tasks match this filter."
+                 : "Nothing in \(model.activeTitle) right now.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        } else if model.preset == .allOpen && !model.isCustom {
+            Text("No open tasks match “\(query)”.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        } else {
+            VStack(spacing: 8) {
+                Text("No matches in \(model.activeTitle).")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Button("Search all open tasks") { model.selectPreset(.allOpen) }
+                    .buttonStyle(.link)
+            }
+            .multilineTextAlignment(.center)
+        }
+    }
+
+    /// Whether an active title search is filtering the list (#32). A query
+    /// forces every group open (below): while hunting for a task, a match must
+    /// never hide behind a collapsed header. An open-but-empty search field
+    /// isn't filtering, so folded groups (#19) behave normally until you type.
+    private var isFilteringBySearch: Bool {
+        !model.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     /// The rows themselves, shared by the scrolling and non-scrolling branches.
     /// A collapsed group (#19) keeps its header and folds its rows away; flat
-    /// presets have no headers, so nothing there can collapse.
+    /// presets have no headers, so nothing there can collapse. An active search
+    /// (#32) overrides the fold: matches always show, so you never click to
+    /// reveal one. The stored fold state is untouched — it re-applies once the
+    /// query clears.
     @ViewBuilder
     private func listContent(_ groups: [TaskGroup], grouped: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -431,7 +542,7 @@ struct ContentView: View {
                 if grouped {
                     sectionHeader(group)
                 }
-                if !grouped || !model.isCollapsed(group.priority) {
+                if !grouped || isFilteringBySearch || !model.isCollapsed(group.priority) {
                     ForEach(group.tasks) { task in
                         row(for: task, showPriority: !grouped)
                             .padding(.vertical, 6)
@@ -557,7 +668,9 @@ struct ContentView: View {
     /// moves on toggle except the chevron and the rows. No animation: the
     /// panel should feel instant.
     private func sectionHeader(_ group: TaskGroup) -> some View {
-        let collapsed = model.isCollapsed(group.priority)
+        // An active search forces the group open (#32), so show the expanded
+        // chevron regardless of the stored fold state.
+        let collapsed = model.isCollapsed(group.priority) && !isFilteringBySearch
         return Button {
             model.toggleCollapsed(group.priority)
         } label: {

@@ -79,6 +79,17 @@ public final class AppModel: ObservableObject {
     /// writes it through here, so whatever is typed is committable from the
     /// shell even as the panel closes.
     @Published public private(set) var editingDraft = ""
+    /// Whether the header's search row is open (#32). Model-owned like
+    /// `isComposing`, so the shell's Esc handling and panel teardown can close
+    /// it, and so opening the composer can collapse it (the two share the row
+    /// below the header and are mutually exclusive).
+    @Published public private(set) var isSearching = false
+    /// The live search query (#32). Filters the active view by title through
+    /// `groups()`. Deliberately *not* persisted: reopening the app to a stale
+    /// filter hiding most tasks would read as data loss. It does survive a
+    /// preset switch, though, so widening a fruitless search to All open is one
+    /// tap rather than a retype.
+    @Published public private(set) var searchText = ""
 
     private let tokenStore: TokenStore
     private let cache: TaskCache?
@@ -282,9 +293,36 @@ public final class AppModel: ObservableObject {
         editingDraft = ""
     }
 
+    /// Open the header search row (#32), collapsing the composer if it was open
+    /// — both live in the row below the header and only one may occupy it.
+    public func openSearch() {
+        closeComposer()
+        isSearching = true
+    }
+
+    /// Close the search row and clear the query (#32). One call for every exit
+    /// route — the toggle icon, Escape, and panel teardown — so a reopened
+    /// panel always starts unfiltered.
+    public func closeSearch() {
+        isSearching = false
+        searchText = ""
+    }
+
+    /// The header icon toggles the search row (#32).
+    public func toggleSearch() {
+        if isSearching { closeSearch() } else { openSearch() }
+    }
+
+    /// The search field pushes each keystroke back through here (#32), so the
+    /// filter lives in the model and `groups()` reflows on every change.
+    public func setSearch(_ text: String) { searchText = text }
+
     /// Open the quick-add composer (#22). Messages from the previous
     /// composition die here — they belong to a draft that no longer exists.
+    /// Collapses the search row if it was open (#32): the two are mutually
+    /// exclusive in the row below the header.
     public func openComposer() {
+        closeSearch()
         createError = nil
         createNotice = nil
         isComposing = true
@@ -506,13 +544,19 @@ public final class AppModel: ObservableObject {
     /// is injectable for tests; the app passes the real date.
     public func groups(today: Date = Date(), calendar: Calendar = .current) -> [TaskGroup] {
         guard case .loaded(let tasks) = state else { return [] }
+        // Apply the title search first (#32): filtering before grouping drops
+        // empty groups and makes the section counts reflect the matches for
+        // free. An empty query passes every task through unchanged. AND-ing a
+        // pure title predicate ahead of the preset/custom filters is
+        // order-independent, so the shown set is identical to filtering after.
+        let searched = TaskListEngine.search(tasks, matching: searchText)
         if isCustom {
-            return TaskListEngine.custom(tasks, query: customQuery,
+            return TaskListEngine.custom(searched, query: customQuery,
                                          priorityOrder: schemaOptions.priorities,
                                          today: today, calendar: calendar)
         }
         return TaskListEngine.groups(
-            for: preset, tasks, openStatuses: openStatuses, workCategory: workCategory,
+            for: preset, searched, openStatuses: openStatuses, workCategory: workCategory,
             personalCategories: personalCategories, priorityOrder: schemaOptions.priorities,
             today: today, calendar: calendar)
     }

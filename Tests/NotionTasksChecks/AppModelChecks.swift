@@ -1770,4 +1770,67 @@ func appModelChecks(_ t: CheckRun) async {
         model.stopPolling()
         await ticker.tick() // release the parked sleep so the cancelled loop exits
     }
+
+    t.suite("AppModel header search (#32)")
+
+    func searchModel() async throws -> AppModel {
+        let store = InMemoryTokenStore()
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
+        await model.submit(token: "ntn_good")
+        return model
+    }
+
+    var searchCal = Calendar(identifier: .gregorian)
+    searchCal.timeZone = TimeZone(identifier: "Europe/London")!
+    let searchToday = searchCal.date(from: DateComponents(year: 2026, month: 7, day: 15, hour: 12))!
+
+    await t.test("search filters the active view by title and drops now-empty groups") {
+        let model = try await searchModel()
+        // Default Pivotal Priorities: P0 (Draft the Q3 board update), P1 (Wire up…).
+        t.expectEqual(model.groups(today: searchToday, calendar: searchCal).map(\.priority), ["P0", "P1"])
+
+        model.setSearch("wire")
+        let groups = model.groups(today: searchToday, calendar: searchCal)
+        t.expectEqual(groups.map(\.priority), ["P1"]) // the empty P0 group is dropped
+        t.expectEqual(groups.first?.tasks.map(\.title), ["Wire up the menu bar read path"])
+        // Section count reflects the match, not the total.
+        t.expectEqual(groups.first?.tasks.count, 1)
+    }
+
+    await t.test("search carries over a preset switch, widening a fruitless query to All open") {
+        let model = try await searchModel()
+        // "Chase vendor…" is a personal Blocked task — hidden by Pivotal (Work only).
+        model.setSearch("chase")
+        t.expect(model.groups(today: searchToday, calendar: searchCal).isEmpty,
+                 "the Chase task is personal, so Pivotal shows no match")
+
+        // Widen to All open WITHOUT retyping: the query must survive the switch.
+        model.selectPreset(.allOpen)
+        t.expectEqual(model.searchText, "chase")
+        t.expectEqual(model.groups(today: searchToday, calendar: searchCal).flatMap(\.tasks).map(\.title),
+                      ["Chase vendor on renewal quote"])
+    }
+
+    await t.test("search and the composer are mutually exclusive; closing search clears the query") {
+        let model = try await searchModel()
+        t.expect(!model.isSearching && model.searchText.isEmpty, "search starts closed and empty")
+
+        model.openSearch()
+        model.setSearch("draft")
+        t.expect(model.isSearching && !model.isComposing, "search open collapses the composer")
+
+        // Opening the composer collapses search and clears the typed query.
+        model.openComposer()
+        t.expect(model.isComposing && !model.isSearching, "composer open collapses search")
+        t.expect(model.searchText.isEmpty, "closing search clears the query")
+
+        // The icon toggles the row open, then shut again.
+        model.toggleSearch()
+        t.expect(model.isSearching && !model.isComposing, "toggling opens search and collapses the composer")
+        model.toggleSearch()
+        t.expect(!model.isSearching && model.searchText.isEmpty, "toggling again closes and clears search")
+    }
 }

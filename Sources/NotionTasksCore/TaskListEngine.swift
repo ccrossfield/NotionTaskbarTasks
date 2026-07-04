@@ -143,6 +143,28 @@ public enum TaskListEngine {
         return flatGroup(filtered.sorted(by: comparator(for: query, priorityRank: rank)))
     }
 
+    /// Filter tasks by the header's free-text title search (#32). Case- and
+    /// diacritic-insensitive; the query is split on whitespace and a task
+    /// matches only when *every* term appears somewhere in its folded title
+    /// (AND, any order) — so word order and the words between don't matter. An
+    /// empty or whitespace-only query matches everything, letting the unfiltered
+    /// view show through. Input order is preserved. Applied before grouping (in
+    /// `AppModel.groups`), so empty groups drop out and section counts reflect
+    /// the matches for free.
+    public static func search(_ tasks: [NotionTask], matching query: String) -> [NotionTask] {
+        let terms = query.folding(options: searchFolding, locale: .current)
+            .split(whereSeparator: \.isWhitespace)
+        guard !terms.isEmpty else { return tasks }
+        return tasks.filter { task in
+            let title = task.title.folding(options: searchFolding, locale: .current)
+            return terms.allSatisfy { title.contains($0) }
+        }
+    }
+
+    /// Fold away case and accents on both the query and the title, so "cafe"
+    /// finds "Café" and "PIVOT" finds "pivot".
+    private static let searchFolding: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
+
     /// A select filter matches when it's empty ("any") or the task's value is in
     /// the allowed set. A task with no value matches only the "any" case.
     private static func matches(_ allowed: Set<String>, _ value: String?) -> Bool {
