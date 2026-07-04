@@ -15,6 +15,12 @@ struct ContentView: View {
     @FocusState private var editingFocused: Bool
     /// Keyboard focus for the header search field (#32).
     @FocusState private var searchFocused: Bool
+    /// The task whose "Pick a date…" calendar popover is open (#33), or nil.
+    /// Keyed by ID so only the matching row presents it, anchored to that row.
+    @State private var datePickerTaskID: String?
+    /// The date the open calendar popover is bound to (#33). Seeded to the
+    /// task's current due date when the popover opens.
+    @State private var draftDueDate = Date()
 
     /// Fixed height for the loaded content region (controls + list). The
     /// MenuBarExtra window doesn't reliably resize to changing content, so a
@@ -707,7 +713,7 @@ struct ContentView: View {
                 metadata(for: task, showPriority: showPriority)
             }
             Spacer(minLength: 8)
-            statusMenu(for: task)
+            rowActionsMenu(for: task)
         }
     }
 
@@ -877,20 +883,122 @@ struct ContentView: View {
         }
     }
 
-    private func statusMenu(for task: NotionTask) -> some View {
+    /// The row's right-side control (#33): an actions menu behind an ellipsis
+    /// icon. Status, Priority and Reschedule are all submenus, each checkmarking
+    /// its current value, so the three read consistently. Right-click stays
+    /// bound to inline rename (#28) - this is an explicit menu, not a
+    /// secondary-click context menu, so the two don't collide. The status used
+    /// to sit here as the label; it moved into the Status submenu, so status is
+    /// no longer shown on the row itself.
+    private func rowActionsMenu(for task: NotionTask) -> some View {
         Menu {
-            ForEach(NotionConfig.selectableStatuses, id: \.self) { state in
-                Button(state) {
-                    Task { await model.setStatus(taskID: task.id, to: state) }
-                }
-            }
+            statusSubmenu(for: task)
+            priorityMenu(for: task)
+            rescheduleMenu(for: task)
         } label: {
-            Text(task.status ?? "Set status")
-                .font(.caption)
+            Image(systemName: "ellipsis.circle")
                 .foregroundStyle(.secondary)
         }
         .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
         .fixedSize()
+        // The calendar popover anchors to this row's control and presents only
+        // when this row's "Pick a date…" was chosen.
+        .popover(isPresented: Binding(
+            get: { datePickerTaskID == task.id },
+            set: { if !$0 { datePickerTaskID = nil } })) {
+            dateEditor(for: task)
+        }
+    }
+
+    /// The Status submenu (#33): the selectable statuses, checkmarked on the
+    /// current one. Was a flat list under the old label; now a submenu so it's
+    /// consistent with Priority and Reschedule.
+    private func statusSubmenu(for task: NotionTask) -> some View {
+        Menu("Status") {
+            ForEach(NotionConfig.selectableStatuses, id: \.self) { state in
+                Button {
+                    Task { await model.setStatus(taskID: task.id, to: state) }
+                } label: {
+                    checkmarked(state, when: task.status == state)
+                }
+            }
+        }
+    }
+
+    /// The Priority submenu (#33): one item per schema priority, checkmarked on
+    /// the current value, plus a "No priority" item that clears it (also
+    /// checkmarked when unset). Options come live from the schema, like the
+    /// composer's priority field, so options the app has never heard of appear.
+    private func priorityMenu(for task: NotionTask) -> some View {
+        Menu("Priority") {
+            ForEach(model.schemaOptions.priorities, id: \.self) { priority in
+                Button {
+                    Task { await model.setPriority(taskID: task.id, to: priority) }
+                } label: {
+                    checkmarked(priority, when: task.priority == priority)
+                }
+            }
+            Divider()
+            Button {
+                Task { await model.setPriority(taskID: task.id, to: nil) }
+            } label: {
+                checkmarked("No priority", when: task.priority == nil)
+            }
+        }
+    }
+
+    /// The Reschedule submenu (#33): the current due date as a disabled context
+    /// line, the quick relative options, "Pick a date…" (opens the calendar
+    /// popover), and Clear. The relative maths lives in `ReschedulePreset`.
+    private func rescheduleMenu(for task: NotionTask) -> some View {
+        Menu("Reschedule") {
+            if let due = task.dueDate {
+                Text("Due \(due.formatted(.dateTime.day().month(.abbreviated).year()))")
+                Divider()
+            }
+            ForEach(ReschedulePreset.allCases, id: \.self) { preset in
+                Button(preset.label) {
+                    Task { await model.setDueDate(taskID: task.id, to: preset.date()) }
+                }
+            }
+            Button("Pick a date…") {
+                // Defer past the menu's own dismissal so the popover presents
+                // cleanly rather than racing the closing menu.
+                let seed = task.dueDate ?? Calendar.current.startOfDay(for: Date())
+                DispatchQueue.main.async {
+                    draftDueDate = seed
+                    datePickerTaskID = task.id
+                }
+            }
+            Divider()
+            Button("Clear due date") {
+                Task { await model.setDueDate(taskID: task.id, to: nil) }
+            }
+        }
+    }
+
+    /// A menu-item label that shows a leading checkmark when `on`, matching the
+    /// settings menu's selected-row style (#33).
+    @ViewBuilder
+    private func checkmarked(_ title: String, when on: Bool) -> some View {
+        if on { Label(title, systemImage: "checkmark") } else { Text(title) }
+    }
+
+    /// The "Pick a date…" popover (#33): a graphical month calendar seeded to
+    /// the task's current due date. Commit-on-tap - selecting a day writes it
+    /// and dismisses; month-navigation doesn't change the selection, so it's
+    /// safe. Re-picking the same day is a harmless no-op (the model guards it).
+    private func dateEditor(for task: NotionTask) -> some View {
+        DatePicker("Due date", selection: $draftDueDate, displayedComponents: .date)
+            .datePickerStyle(.graphical)
+            .labelsHidden()
+            .padding()
+            .frame(minWidth: 260)
+            .onChange(of: draftDueDate) { _, newDate in
+                Task { await model.setDueDate(taskID: task.id, to: newDate) }
+                datePickerTaskID = nil
+            }
     }
 
     private func failure(_ message: String) -> some View {

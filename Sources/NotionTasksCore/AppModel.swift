@@ -264,6 +264,91 @@ public final class AppModel: ObservableObject {
             fetchedAt: lastRefreshed ?? now()))
     }
 
+    /// Re-prioritise a task and persist it (#33). Optimistic like `setTitle`:
+    /// the row shows the new priority at once (and reflows to its new group),
+    /// with the PATCH running behind it; a failure rolls it back. `nil` clears
+    /// the priority. Selecting the priority the task already has is a no-op -
+    /// no pointless write.
+    public func setPriority(taskID: String, to newPriority: String?) async {
+        guard case .loaded(let current) = state else { return }
+        guard let token = tokenStore.read(), !token.isEmpty else { return }
+        guard let original = current.first(where: { $0.id == taskID }) else { return }
+        guard newPriority != original.priority else { return }
+        writeError = nil
+        // Show the change immediately; the write catches up.
+        applyPriority(newPriority, to: taskID)
+        do {
+            try await makeClient(token).updatePriority(pageID: taskID, to: newPriority)
+            // Re-assert after the await: a refresh may have landed Notion's
+            // pre-change copy while the PATCH was in flight (the issue #12 pattern).
+            applyPriority(newPriority, to: taskID)
+        } catch NotionClientError.unauthorized {
+            // The token died between load and write. Roll back, then route to
+            // reconnect like every write path (#13).
+            applyPriority(original.priority, to: taskID)
+            try? tokenStore.delete()
+            state = .failed("Notion rejected the stored token, so that change wasn't saved. Enter a new token to reconnect.")
+        } catch {
+            applyPriority(original.priority, to: taskID)
+            writeError = "Couldn't update that task's priority in Notion; it's unchanged. Try again."
+        }
+    }
+
+    /// Reschedule a task and persist it (#33). The mirror of `setPriority`:
+    /// optimistic, with the same rollback and reconnect handling. `nil` clears
+    /// the due date. A change to the same calendar day is a no-op - due dates
+    /// are date-only, so a different time on the same day isn't worth a write.
+    public func setDueDate(taskID: String, to newDueDate: Date?, calendar: Calendar = .current) async {
+        guard case .loaded(let current) = state else { return }
+        guard let token = tokenStore.read(), !token.isEmpty else { return }
+        guard let original = current.first(where: { $0.id == taskID }) else { return }
+        let sameDay: Bool
+        switch (newDueDate, original.dueDate) {
+        case (nil, nil): sameDay = true
+        case let (new?, old?): sameDay = calendar.isDate(new, inSameDayAs: old)
+        default: sameDay = false
+        }
+        guard !sameDay else { return }
+        writeError = nil
+        applyDueDate(newDueDate, to: taskID)
+        do {
+            try await makeClient(token).updateDueDate(pageID: taskID, to: newDueDate)
+            applyDueDate(newDueDate, to: taskID)
+        } catch NotionClientError.unauthorized {
+            applyDueDate(original.dueDate, to: taskID)
+            try? tokenStore.delete()
+            state = .failed("Notion rejected the stored token, so that change wasn't saved. Enter a new token to reconnect.")
+        } catch {
+            applyDueDate(original.dueDate, to: taskID)
+            writeError = "Couldn't reschedule that task in Notion; its due date is unchanged. Try again."
+        }
+    }
+
+    /// Set a task's priority in the loaded state and keep the cache in step,
+    /// re-reading state each call so it is safe across the write's await
+    /// suspension point (#12). The mirror of `applyTitle`.
+    private func applyPriority(_ priority: String?, to taskID: String) {
+        guard case .loaded(let current) = state else { return }
+        let updated = current.map { $0.id == taskID ? $0.withPriority(priority) : $0 }
+        state = .loaded(updated)
+        cache?.save(CachedSnapshot(
+            tasks: updated, openStatuses: openStatuses, workCategory: workCategory,
+            personalCategories: personalCategories, schemaOptions: schemaOptions,
+            fetchedAt: lastRefreshed ?? now()))
+    }
+
+    /// Set a task's due date in the loaded state and keep the cache in step,
+    /// re-reading state each call (#12). The mirror of `applyPriority`.
+    private func applyDueDate(_ dueDate: Date?, to taskID: String) {
+        guard case .loaded(let current) = state else { return }
+        let updated = current.map { $0.id == taskID ? $0.withDueDate(dueDate) : $0 }
+        state = .loaded(updated)
+        cache?.save(CachedSnapshot(
+            tasks: updated, openStatuses: openStatuses, workCategory: workCategory,
+            personalCategories: personalCategories, schemaOptions: schemaOptions,
+            fetchedAt: lastRefreshed ?? now()))
+    }
+
     /// Begin renaming a task inline (#28). Any rename already open on another
     /// row is committed first, so switching rows never silently drops an edit.
     public func beginEditing(taskID: String, title: String) {

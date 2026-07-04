@@ -214,6 +214,102 @@ func clientChecks(_ t: CheckRun) async {
         }
     }
 
+    await t.test("updatePriority PATCHes the Priority select by name (#33)") {
+        let stub = StubHTTPClient(responseData: Data(), statusCode: 200)
+        let client = NotionClient(dataSourceID: dataSource, token: "ntn_test", http: stub)
+
+        try await client.updatePriority(pageID: "page-123", to: "P0")
+
+        let request = try require(stub.lastRequest)
+        t.expect(request.httpMethod == "PATCH", "method was \(request.httpMethod ?? "nil")")
+        t.expect(request.url?.absoluteString == "https://api.notion.com/v1/pages/page-123",
+                 "url was \(request.url?.absoluteString ?? "nil")")
+
+        // Exactly {"properties":{"Priority":{"select":{"name":"P0"}}}}.
+        let body = try require(request.httpBody)
+        let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        t.expect((json?.keys.sorted() ?? []) == ["properties"],
+                 "top-level keys were \(json?.keys.sorted() ?? [])")
+        let select = (((json?["properties"] as? [String: Any])?["Priority"] as? [String: Any])?["select"])
+            as? [String: Any]
+        t.expect(select?["name"] as? String == "P0", "select.name was \(select?["name"] ?? "nil")")
+    }
+
+    await t.test("clearing priority PATCHes select: null so Notion unsets it (#33)") {
+        let stub = StubHTTPClient(responseData: Data(), statusCode: 200)
+        let client = NotionClient(dataSourceID: dataSource, token: "ntn_test", http: stub)
+
+        try await client.updatePriority(pageID: "page-123", to: nil)
+
+        let body = try require(try require(stub.lastRequest).httpBody)
+        let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        let priority = ((json?["properties"] as? [String: Any])?["Priority"]) as? [String: Any]
+        // The "select" key must be present *and* JSON null - omitting it leaves
+        // the priority unchanged rather than clearing it.
+        t.expect(priority?.keys.contains("select") == true, "select key must be present to clear")
+        t.expect(priority?["select"] is NSNull,
+                 "select must be JSON null to clear, was \(String(describing: priority?["select"]))")
+    }
+
+    await t.test("a failed priority write throws (#33)") {
+        let stub = StubHTTPClient(responseData: Data(), statusCode: 500)
+        let client = NotionClient(dataSourceID: dataSource, token: "t", http: stub)
+        do {
+            try await client.updatePriority(pageID: "p", to: "P0")
+            t.expect(false, "expected updatePriority to throw")
+        } catch NotionClientError.httpError(let code) {
+            t.expectEqual(code, 500)
+        } catch {
+            t.expect(false, "wrong error: \(error)")
+        }
+    }
+
+    await t.test("updateDueDate PATCHes the Due Date date.start as a date-only string (#33)") {
+        let stub = StubHTTPClient(responseData: Data(), statusCode: 200)
+        let client = NotionClient(dataSourceID: dataSource, token: "ntn_test", http: stub)
+        // Local midnight, so the date-only round-trip lands on the same day.
+        let due = Calendar.current.date(from: DateComponents(year: 2026, month: 7, day: 6))!
+
+        try await client.updateDueDate(pageID: "page-123", to: due)
+
+        let request = try require(stub.lastRequest)
+        t.expect(request.httpMethod == "PATCH", "method was \(request.httpMethod ?? "nil")")
+        let body = try require(request.httpBody)
+        let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        t.expect((json?.keys.sorted() ?? []) == ["properties"],
+                 "top-level keys were \(json?.keys.sorted() ?? [])")
+        let date = (((json?["properties"] as? [String: Any])?["Due Date"] as? [String: Any])?["date"])
+            as? [String: Any]
+        t.expect(date?["start"] as? String == "2026-07-06", "date.start was \(date?["start"] ?? "nil")")
+    }
+
+    await t.test("clearing the due date PATCHes date: null so Notion unsets it (#33)") {
+        let stub = StubHTTPClient(responseData: Data(), statusCode: 200)
+        let client = NotionClient(dataSourceID: dataSource, token: "ntn_test", http: stub)
+
+        try await client.updateDueDate(pageID: "page-123", to: nil)
+
+        let body = try require(try require(stub.lastRequest).httpBody)
+        let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        let dueProp = ((json?["properties"] as? [String: Any])?["Due Date"]) as? [String: Any]
+        t.expect(dueProp?.keys.contains("date") == true, "date key must be present to clear")
+        t.expect(dueProp?["date"] is NSNull,
+                 "date must be JSON null to clear, was \(String(describing: dueProp?["date"]))")
+    }
+
+    await t.test("a failed due-date write throws (#33)") {
+        let stub = StubHTTPClient(responseData: Data(), statusCode: 500)
+        let client = NotionClient(dataSourceID: dataSource, token: "t", http: stub)
+        do {
+            try await client.updateDueDate(pageID: "p", to: Date())
+            t.expect(false, "expected updateDueDate to throw")
+        } catch NotionClientError.httpError(let code) {
+            t.expectEqual(code, 500)
+        } catch {
+            t.expect(false, "wrong error: \(error)")
+        }
+    }
+
     t.suite("NotionClient pagination")
 
     // A minimal query-response page: one task, plus the paging fields. The real

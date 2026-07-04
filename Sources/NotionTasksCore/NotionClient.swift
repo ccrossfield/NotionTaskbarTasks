@@ -165,6 +165,31 @@ public struct NotionClient {
         _ = try await send(request)
     }
 
+    /// Sets (or clears) a task's Priority (#33). Priority is a `select`, so the
+    /// shape mirrors the create path: `{"select":{"name":<name>}}`. Clearing
+    /// sends `{"select":null}` - the key must be present and null, or Notion
+    /// leaves the value untouched rather than unsetting it. Keyed by the literal
+    /// "Priority" name, matching `createTask`.
+    public func updatePriority(pageID: String, to priority: String?) async throws {
+        let select: Any = priority.map { ["name": $0] } ?? NSNull()
+        let request = makeRequest(path: "pages/\(pageID)",
+                                  method: "PATCH",
+                                  jsonBody: ["properties": ["Priority": ["select": select]]])
+        _ = try await send(request)
+    }
+
+    /// Sets (or clears) a task's Due Date (#33). It's a `date` property, so the
+    /// shape mirrors the create path: `{"date":{"start":<yyyy-MM-dd>}}`, date-only
+    /// via `dateOnlyString`. Clearing sends `{"date":null}` - present and null, or
+    /// Notion won't unset it. Keyed by the literal "Due Date" name, like `createTask`.
+    public func updateDueDate(pageID: String, to date: Date?) async throws {
+        let value: Any = date.map { ["start": Self.dateOnlyString(from: $0)] } ?? NSNull()
+        let request = makeRequest(path: "pages/\(pageID)",
+                                  method: "PATCH",
+                                  jsonBody: ["properties": ["Due Date": ["date": value]]])
+        _ = try await send(request)
+    }
+
     private func makeRequest(path: String, method: String, jsonBody: Any? = nil) -> URLRequest {
         var request = URLRequest(url: URL(string: "https://api.notion.com/v1/\(path)")!)
         request.httpMethod = method

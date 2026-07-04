@@ -1833,4 +1833,166 @@ func appModelChecks(_ t: CheckRun) async {
         model.toggleSearch()
         t.expect(!model.isSearching && model.searchText.isEmpty, "toggling again closes and clears search")
     }
+
+    t.suite("AppModel reschedule & re-prioritise (#33)")
+
+    // firstTaskID in the fixture: P1, due 2026-06-28, Work, In Progress.
+    func loadedTask(_ model: AppModel, _ id: String) -> NotionTask? {
+        guard case .loaded(let tasks) = model.state else { return nil }
+        return tasks.first { $0.id == id }
+    }
+    func routingModel(_ store: InMemoryTokenStore = InMemoryTokenStore(),
+                      cache: InMemoryTaskCache? = nil) async throws -> (AppModel, RoutingStubHTTPClient) {
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"), query: try fixtureData("query_response"))
+        let model = AppModel(tokenStore: store, cache: cache) {
+            NotionClient(dataSourceID: ds, token: $0, http: stub)
+        }
+        await model.submit(token: "ntn_good")
+        return (model, stub)
+    }
+    func patchBody(_ stub: RoutingStubHTTPClient, _ id: String) throws -> [String: Any]? {
+        let patch = try require(stub.requests.first {
+            $0.httpMethod == "PATCH" && $0.url?.absoluteString.hasSuffix("/pages/\(id)") == true
+        }, "expected a PATCH to the page")
+        return try JSONSerialization.jsonObject(with: try require(patch.httpBody)) as? [String: Any]
+    }
+
+    await t.test("setPriority changes the row's priority, keeps other fields, and PATCHes the select") {
+        let (model, stub) = try await routingModel()
+
+        await model.setPriority(taskID: firstTaskID, to: "P0")
+
+        let task = try require(loadedTask(model, firstTaskID))
+        t.expect(task.priority == "P0", "priority was \(task.priority ?? "nil")")
+        t.expect(task.title == firstTaskTitle, "title drifted to \(task.title)")
+        t.expect(task.status == "In Progress", "status drifted to \(task.status ?? "nil")")
+        t.expect(model.writeError == nil, "no write error expected, got \(model.writeError ?? "nil")")
+
+        let props = try patchBody(stub, firstTaskID)?["properties"] as? [String: Any]
+        let name = ((props?["Priority"] as? [String: Any])?["select"] as? [String: Any])?["name"] as? String
+        t.expect(name == "P0", "sent priority was \(name ?? "nil")")
+    }
+
+    await t.test("re-prioritising reflows the task into its new group") {
+        let (model, _) = try await routingModel() // default preset groups by priority
+
+        await model.setPriority(taskID: firstTaskID, to: "P0")
+
+        let p0 = model.groups().first { $0.priority == "P0" }
+        t.expect(p0?.tasks.contains { $0.id == firstTaskID } == true,
+                 "the re-prioritised task should appear in the P0 group")
+    }
+
+    await t.test("setting the priority a task already has sends no PATCH") {
+        let (model, stub) = try await routingModel()
+
+        await model.setPriority(taskID: firstTaskID, to: "P1") // already P1
+
+        t.expect(!stub.requests.contains { $0.httpMethod == "PATCH" },
+                 "an unchanged priority is not worth a round-trip")
+    }
+
+    await t.test("setPriority(nil) clears the priority and PATCHes select: null") {
+        let (model, stub) = try await routingModel()
+
+        await model.setPriority(taskID: firstTaskID, to: nil)
+
+        t.expect(loadedTask(model, firstTaskID)?.priority == nil, "priority should clear")
+        let props = try patchBody(stub, firstTaskID)?["properties"] as? [String: Any]
+        let select = (props?["Priority"] as? [String: Any])?["select"]
+        t.expect(select is NSNull, "clear must send select: null, was \(String(describing: select))")
+    }
+
+    await t.test("a failed priority write rolls back and surfaces a write error") {
+        let store = InMemoryTokenStore()
+        let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)
+        let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
+        await model.submit(token: "ntn_good")
+        stub.statusCode = 500 // the write will fail
+
+        await model.setPriority(taskID: firstTaskID, to: "P0")
+
+        t.expect(loadedTask(model, firstTaskID)?.priority == "P1", "the optimistic change must roll back to P1")
+        t.expect(model.writeError != nil, "a failed priority write should tell the user it didn't take")
+    }
+
+    await t.test("a 401 on a priority write drops the token and routes to reconnect (#13)") {
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)
+        let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
+        await model.start()
+        stub.statusCode = 401 // token revoked between load and the write
+
+        await model.setPriority(taskID: firstTaskID, to: "P0")
+
+        t.expect(store.read() == nil, "a rejected token must be cleared")
+        if case .failed(let message) = model.state {
+            t.expect(message.localizedCaseInsensitiveContains("token"),
+                     "the failure must route to the token, said: \(message)")
+        } else {
+            t.expect(false, "expected .failed (reconnect), got \(model.state)")
+        }
+    }
+
+    await t.test("setDueDate sets the date on the row and PATCHes date.start") {
+        let (model, stub) = try await routingModel()
+        let newDue = Calendar.current.date(from: DateComponents(year: 2026, month: 7, day: 20))!
+
+        await model.setDueDate(taskID: firstTaskID, to: newDue)
+
+        t.expect(loadedTask(model, firstTaskID)?.dueDate == newDue, "the row's due date should update")
+        t.expect(model.writeError == nil, "no write error, got \(model.writeError ?? "nil")")
+        let props = try patchBody(stub, firstTaskID)?["properties"] as? [String: Any]
+        let start = ((props?["Due Date"] as? [String: Any])?["date"] as? [String: Any])?["start"] as? String
+        t.expect(start == "2026-07-20", "sent due date was \(start ?? "nil")")
+    }
+
+    await t.test("setDueDate(nil) clears the due date and PATCHes date: null") {
+        let (model, stub) = try await routingModel()
+
+        await model.setDueDate(taskID: firstTaskID, to: nil)
+
+        t.expect(loadedTask(model, firstTaskID)?.dueDate == nil, "due date should clear")
+        let props = try patchBody(stub, firstTaskID)?["properties"] as? [String: Any]
+        let date = (props?["Due Date"] as? [String: Any])?["date"]
+        t.expect(date is NSNull, "clear must send date: null, was \(String(describing: date))")
+    }
+
+    await t.test("rescheduling to the same calendar day sends no PATCH") {
+        let (model, stub) = try await routingModel()
+        // The fixture's due is 2026-06-28; a different time on the same day is a no-op.
+        let sameDay = Calendar.current.date(from: DateComponents(year: 2026, month: 6, day: 28, hour: 14))!
+
+        await model.setDueDate(taskID: firstTaskID, to: sameDay)
+
+        t.expect(!stub.requests.contains { $0.httpMethod == "PATCH" },
+                 "a same-day reschedule is not worth a round-trip")
+    }
+
+    await t.test("a failed reschedule rolls the date back and surfaces a write error") {
+        let store = InMemoryTokenStore()
+        let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)
+        let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
+        await model.submit(token: "ntn_good")
+        let original = loadedTask(model, firstTaskID)?.dueDate
+        stub.statusCode = 500
+
+        await model.setDueDate(taskID: firstTaskID,
+                               to: Calendar.current.date(from: DateComponents(year: 2026, month: 8, day: 1))!)
+
+        t.expect(loadedTask(model, firstTaskID)?.dueDate == original, "the optimistic change must roll back")
+        t.expect(model.writeError != nil, "a failed reschedule should tell the user it didn't take")
+    }
+
+    await t.test("a reschedule is written to the cache so a relaunch keeps it") {
+        let cache = InMemoryTaskCache()
+        let (model, _) = try await routingModel(cache: cache)
+        let newDue = Calendar.current.date(from: DateComponents(year: 2026, month: 7, day: 20))!
+
+        await model.setDueDate(taskID: firstTaskID, to: newDue)
+
+        t.expect(cache.saved.last?.tasks.first { $0.id == firstTaskID }?.dueDate == newDue,
+                 "the new due date must be cached, or a relaunch loses it")
+    }
 }

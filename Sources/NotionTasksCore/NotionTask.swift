@@ -95,6 +95,26 @@ public struct NotionTask: Identifiable, Equatable, Codable {
             url: url)
     }
 
+    /// A copy with a new priority (`nil` clears it), keeping every other field.
+    /// Used by the re-prioritise write path (#33), the mirror of `withStatus`.
+    public func withPriority(_ newPriority: String?) -> NotionTask {
+        NotionTask(
+            id: id, title: title, status: status, priority: newPriority,
+            dueDate: dueDate, category: category, startFrom: startFrom,
+            createdTime: createdTime, lastEditedTime: lastEditedTime, workType: workType,
+            url: url)
+    }
+
+    /// A copy with a new due date (`nil` clears it), keeping every other field.
+    /// Used by the reschedule write path (#33), the mirror of `withStatus`.
+    public func withDueDate(_ newDueDate: Date?) -> NotionTask {
+        NotionTask(
+            id: id, title: title, status: status, priority: priority,
+            dueDate: newDueDate, category: category, startFrom: startFrom,
+            createdTime: createdTime, lastEditedTime: lastEditedTime, workType: workType,
+            url: url)
+    }
+
     /// The task's page URL as a value the view can hand to `NSWorkspace` (#21).
     /// `nil` when the page URL is absent or malformed.
     public var webURL: URL? {
