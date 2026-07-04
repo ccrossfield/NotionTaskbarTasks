@@ -4,6 +4,42 @@ A native SwiftUI menu bar app that shows tasks from a Notion database and (in
 later slices) lets you filter, sort and change their status. See the PRD in
 GitHub issue #1 and the API decisions in `docs/adr/0001-notion-api-access.md`.
 
+## Screenshots
+
+<p align="center">
+  <img src="docs/images/task-list.png" width="360"
+       alt="Notion Tasks menu bar popover showing tasks grouped by priority (P0/P1/P2) with colour-coded due dates and a per-row status menu">
+</p>
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/images/quick-add.png" width="100%"
+           alt="The quick-add composer: a title field with Priority, Category and Due chips, and Cancel / Add buttons">
+      <br><b>Quick-add</b> — capture a task inline with Priority, Category and a due date, without leaving the panel.
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/images/custom-view.png" width="100%"
+           alt="The Custom view with Filter and Sort controls above a flat task list, each row carrying its priority dot">
+      <br><b>Custom view</b> — build your own filter and sort; each row carries its priority dot.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/images/dark-mode.png" width="100%"
+           alt="The task list in dark mode, with due-date tints tuned brighter for a dark background">
+      <br><b>Dark mode</b> — the urgency tints adapt to a dark background (ADR-0003).
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/images/connect.png" width="100%"
+           alt="The first-run screen: explanatory text, a secure token field, and a Connect button">
+      <br><b>First run</b> — paste a Notion integration token; it's stored in your Keychain.
+    </td>
+  </tr>
+</table>
+
+<sub>Interface mockups with sample data — the layout, colours and wording are taken from the app; the tasks shown are illustrative.</sub>
+
 ## Layout
 
 - `Sources/NotionTasksCore` - all testable logic: the task model + decoder, the
