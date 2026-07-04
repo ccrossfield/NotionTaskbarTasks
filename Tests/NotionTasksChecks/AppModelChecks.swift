@@ -1576,4 +1576,198 @@ func appModelChecks(_ t: CheckRun) async {
         t.expect(model.createError == nil && model.createNotice == nil,
                  "a fresh composition starts clean")
     }
+
+    t.suite("AppModel inline rename (#28)")
+
+    // firstTaskID in the fixture: "Wire up the menu bar read path", In Progress.
+    let firstTaskTitle = "Wire up the menu bar read path"
+
+    func rowTitle(_ model: AppModel, _ id: String) -> String? {
+        guard case .loaded(let tasks) = model.state else { return nil }
+        return tasks.first { $0.id == id }?.title
+    }
+
+    await t.test("setTitle renames the row and PATCHes the schema-resolved title property") {
+        let store = InMemoryTokenStore()
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
+        await model.submit(token: "ntn_good")
+
+        await model.setTitle(taskID: firstTaskID, to: "Renamed task")
+
+        t.expectEqual(rowTitle(model, firstTaskID), "Renamed task")
+        t.expect(model.writeError == nil, "no write error expected, got \(model.writeError ?? "nil")")
+        // The other fields of the renamed row are preserved.
+        guard case .loaded(let tasks) = model.state else {
+            t.expect(false, "expected .loaded, got \(model.state)"); return
+        }
+        let renamed = try require(tasks.first { $0.id == firstTaskID })
+        t.expect(renamed.status == "In Progress", "status drifted to \(renamed.status ?? "nil")")
+
+        // A PATCH went to the page, keyed by the schema's title name ("Task").
+        let patch = try require(stub.requests.first {
+            $0.httpMethod == "PATCH" && $0.url?.absoluteString.hasSuffix("/pages/\(firstTaskID)") == true
+        }, "expected a PATCH to the page")
+        let body = try JSONSerialization.jsonObject(
+            with: try require(patch.httpBody)) as? [String: Any]
+        let props = body?["properties"] as? [String: Any]
+        t.expect(props?.keys.sorted() == ["Task"], "keyed by the resolved name, was \(props?.keys.sorted() ?? [])")
+        let content = (((props?["Task"] as? [String: Any])?["title"]
+            as? [[String: Any]])?.first?["text"] as? [String: Any])?["content"] as? String
+        t.expect(content == "Renamed task", "title sent was \(content ?? "nil")")
+    }
+
+    await t.test("an empty title reverts and sends no PATCH") {
+        let store = InMemoryTokenStore()
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
+        await model.submit(token: "ntn_good")
+
+        await model.setTitle(taskID: firstTaskID, to: "   \n ")
+
+        t.expectEqual(rowTitle(model, firstTaskID), firstTaskTitle)
+        t.expect(!stub.requests.contains { $0.httpMethod == "PATCH" },
+                 "a blank rename must not be written")
+        t.expect(model.writeError == nil, "reverting a blank rename is not an error")
+    }
+
+    await t.test("an unchanged title sends no PATCH") {
+        let store = InMemoryTokenStore()
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
+        await model.submit(token: "ntn_good")
+
+        // Same text, only surrounded by whitespace: still a no-op after trimming.
+        await model.setTitle(taskID: firstTaskID, to: "  \(firstTaskTitle)  ")
+
+        t.expectEqual(rowTitle(model, firstTaskID), firstTaskTitle)
+        t.expect(!stub.requests.contains { $0.httpMethod == "PATCH" },
+                 "an unchanged title is not worth a round-trip")
+    }
+
+    await t.test("a failed rename rolls the title back and surfaces a write error") {
+        let store = InMemoryTokenStore()
+        let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)
+        let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
+        await model.submit(token: "ntn_good")
+        stub.statusCode = 500 // the write will fail
+
+        await model.setTitle(taskID: firstTaskID, to: "Doomed rename")
+
+        t.expectEqual(rowTitle(model, firstTaskID), firstTaskTitle) // optimistic change rolled back
+        t.expect(model.writeError != nil, "a failed rename should tell the user it didn't take")
+    }
+
+    await t.test("a rename is written to the cache so a relaunch keeps it") {
+        let store = InMemoryTokenStore()
+        let cache = InMemoryTaskCache()
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        let model = AppModel(tokenStore: store, cache: cache) {
+            NotionClient(dataSourceID: ds, token: $0, http: stub)
+        }
+        await model.submit(token: "ntn_good")
+
+        await model.setTitle(taskID: firstTaskID, to: "Cached name")
+
+        t.expect(cache.saved.last?.tasks.first { $0.id == firstTaskID }?.title == "Cached name",
+                 "the renamed title must be cached, or a relaunch loses it")
+    }
+
+    await t.test("a 401 on rename drops the token and routes to reconnect, like every write (#13)") {
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)
+        let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
+        await model.start()
+
+        stub.statusCode = 401 // token revoked between load and the rename
+        await model.setTitle(taskID: firstTaskID, to: "Never lands")
+
+        t.expect(store.read() == nil, "a rejected token must be cleared")
+        if case .failed(let message) = model.state {
+            t.expect(message.localizedCaseInsensitiveContains("token"),
+                     "the failure must route to the token, said: \(message)")
+        } else {
+            t.expect(false, "expected .failed (reconnect), got \(model.state)")
+        }
+    }
+
+    await t.test("beginEditing arms the draft; cancelEditing abandons it with no write") {
+        let store = InMemoryTokenStore()
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
+        await model.submit(token: "ntn_good")
+
+        model.beginEditing(taskID: firstTaskID, title: firstTaskTitle)
+        t.expectEqual(model.editingTaskID, firstTaskID)
+        t.expectEqual(model.editingDraft, firstTaskTitle)
+
+        model.setEditingDraft("Half-typed")
+        model.cancelEditing()
+
+        t.expect(model.editingTaskID == nil, "cancel leaves edit mode")
+        t.expectEqual(rowTitle(model, firstTaskID), firstTaskTitle) // untouched
+        t.expect(!stub.requests.contains { $0.httpMethod == "PATCH" }, "cancel writes nothing")
+    }
+
+    await t.test("commitEditing leaves edit mode at once and persists the draft") {
+        let store = InMemoryTokenStore()
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        let model = AppModel(tokenStore: store) { NotionClient(dataSourceID: ds, token: $0, http: stub) }
+        await model.submit(token: "ntn_good")
+
+        model.beginEditing(taskID: firstTaskID, title: firstTaskTitle)
+        model.setEditingDraft("Committed name")
+        model.commitEditing()
+
+        t.expect(model.editingTaskID == nil, "commit leaves edit mode immediately")
+        // The write runs in a detached task; spin until the rename lands.
+        var spins = 0
+        while rowTitle(model, firstTaskID) != "Committed name", spins < 500 {
+            await Task.yield(); spins += 1
+        }
+        t.expectEqual(rowTitle(model, firstTaskID), "Committed name")
+    }
+
+    await t.test("auto-refresh holds off while a row is being renamed (#28)") {
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let stub = StubHTTPClient(responseData: try fixtureData("query_response"), statusCode: 200)
+        let ticker = PollTicker()
+        let model = AppModel(tokenStore: store, pollSleep: ticker.sleep) {
+            NotionClient(dataSourceID: ds, token: $0, http: stub)
+        }
+        await model.start()
+        model.startPolling(every: 60)
+        var spins = 0
+        while await ticker.intervals.isEmpty, spins < 500 { await Task.yield(); spins += 1 }
+
+        // Editing open: an elapsing interval must not fetch — it re-parks instead.
+        model.beginEditing(taskID: firstTaskID, title: firstTaskTitle)
+        let fetchesWhileEditing = stub.requestCount
+        await ticker.tick()
+        spins = 0
+        while await ticker.intervals.count < 2, spins < 500 { await Task.yield(); spins += 1 }
+        t.expectEqual(stub.requestCount, fetchesWhileEditing) // no refresh landed
+
+        // Editing ended: the next elapsing interval refreshes as normal.
+        model.cancelEditing()
+        await ticker.tick()
+        spins = 0
+        while stub.requestCount == fetchesWhileEditing, spins < 500 { await Task.yield(); spins += 1 }
+        t.expect(stub.requestCount > fetchesWhileEditing, "the poll resumes once editing ends")
+
+        model.stopPolling()
+        await ticker.tick() // release the parked sleep so the cancelled loop exits
+    }
 }

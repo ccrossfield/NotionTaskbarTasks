@@ -125,4 +125,25 @@ func taskPresentationChecks(_ t: CheckRun) async {
         t.expect(task.webURL == nil, "expected nil webURL")
         t.expect(task.notionAppURL == nil, "expected nil notionAppURL")
     }
+
+    t.suite("Renaming a task (#28)")
+
+    await t.test("withTitle changes only the title, keeping every other field") {
+        let due = noon(2026, 7, 10, cal)
+        let task = NotionTask(
+            id: "x", title: "Old name", status: "In Progress", priority: "P1",
+            dueDate: due, category: "👨🏻‍💻 Work", workType: "PIVOT",
+            url: "https://www.notion.so/x")
+
+        let renamed = task.withTitle("New name")
+
+        t.expectEqual(renamed.title, "New name")
+        t.expectEqual(renamed.id, "x")
+        t.expectEqual(renamed.status, "In Progress")
+        t.expectEqual(renamed.priority, "P1")
+        t.expectEqual(renamed.dueDate, due)
+        t.expectEqual(renamed.category, "👨🏻‍💻 Work")
+        t.expectEqual(renamed.workType, "PIVOT")
+        t.expectEqual(renamed.url, "https://www.notion.so/x")
+    }
 }

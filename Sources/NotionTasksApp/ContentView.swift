@@ -10,6 +10,9 @@ struct ContentView: View {
     /// Whether the compact due-date field is showing ("Pick a date…").
     @State private var showDueDateField = false
     @FocusState private var draftTitleFocused: Bool
+    /// Keyboard focus for the inline rename field (#28). Only one row edits at
+    /// a time (the model holds a single `editingTaskID`), so one flag suffices.
+    @FocusState private var editingFocused: Bool
 
     /// Fixed height for the loaded content region (controls + list). The
     /// MenuBarExtra window doesn't reliably resize to changing content, so a
@@ -593,32 +596,59 @@ struct ContentView: View {
             Spacer(minLength: 8)
             statusMenu(for: task)
         }
-        .contextMenu {
-            if task.webURL != nil {
-                Button("Open in Notion") { openInNotion(task) }
-            }
-        }
     }
 
-    /// Line 1: the title. Clicking it opens the task in Notion (#21), so
-    /// fields the app doesn't edit are one click away; the row's context menu
-    /// carries the same action for discoverability. A task with no URL (only
-    /// possible from a pre-#21 cached snapshot) renders as plain text.
+    /// Line 1: the title. Left-click opens the task in Notion (#21), so fields
+    /// the app doesn't edit are one click away; right-click renames it inline
+    /// (#28). SwiftUI has no bare right-click gesture — `.contextMenu` owns
+    /// secondary-click — so a small AppKit router (below) owns both buttons on
+    /// the title directly, which is why the row has no context menu. A task
+    /// with no URL (only from a pre-#21 cached snapshot) still renames; its
+    /// left-click open is simply a no-op.
     @ViewBuilder
     private func title(for task: NotionTask) -> some View {
-        if task.webURL != nil {
-            Button {
-                openInNotion(task)
-            } label: {
-                Text(task.title)
-                    .lineLimit(2)
-            }
-            .buttonStyle(.plain)
-            .help("Open in Notion")
+        if model.editingTaskID == task.id {
+            titleEditor(for: task)
         } else {
             Text(task.title)
                 .lineLimit(2)
+                .overlay(TitleClickRouter(
+                    onLeftClick: { openInNotion(task) },
+                    onRightClick: { model.beginEditing(taskID: task.id, title: task.title) }))
+                .help("Left-click to open in Notion · Right-click to rename")
         }
+    }
+
+    /// The inline rename field (#28). Auto-focused with the text selected, so
+    /// typing replaces the title wholesale (Finder's rename feel). Enter or
+    /// losing focus saves; Escape cancels (routed via the shell's Esc monitor,
+    /// which fires before the field can see the key). The draft lives in the
+    /// model so the shell can commit it even as the panel tears down.
+    private func titleEditor(for task: NotionTask) -> some View {
+        TextField("Task name", text: Binding(
+            get: { model.editingDraft },
+            set: { model.setEditingDraft($0) }))
+            .textFieldStyle(.roundedBorder)
+            .lineLimit(1)
+            .focused($editingFocused)
+            .onSubmit { model.commitEditing() }
+            .onAppear {
+                // The field must be in the hierarchy before it can take focus;
+                // select-all needs the field editor installed, one hop later.
+                DispatchQueue.main.async {
+                    editingFocused = true
+                    DispatchQueue.main.async {
+                        (NSApp.keyWindow?.firstResponder as? NSText)?.selectAll(nil)
+                    }
+                }
+            }
+            .onChange(of: editingFocused) { _, focused in
+                // Blur saves (Q3), but only if this row is still the one being
+                // edited — switching rows re-homes editing and commits the old.
+                if !focused && model.editingTaskID == task.id {
+                    model.commitEditing()
+                }
+            }
     }
 
     /// The only open-target decision in the view: prefer the notion:// deep
@@ -815,5 +845,50 @@ struct ContentView: View {
         let token = tokenField
         tokenField = ""
         Task { await model.submit(token: token) }
+    }
+}
+
+/// Routes clicks on a task title without a context menu (#28): left-click opens
+/// the task in Notion, right-click begins an inline rename. SwiftUI has no bare
+/// right-click gesture (`.contextMenu` owns secondary-click), so this small
+/// AppKit view owns both mouse buttons directly. It draws nothing and sits as
+/// an overlay over the SwiftUI `Text`, which renders underneath.
+private struct TitleClickRouter: NSViewRepresentable {
+    var onLeftClick: () -> Void
+    var onRightClick: () -> Void
+
+    func makeNSView(context: Context) -> RouterView {
+        let view = RouterView()
+        view.onLeftClick = onLeftClick
+        view.onRightClick = onRightClick
+        return view
+    }
+
+    func updateNSView(_ view: RouterView, context: Context) {
+        view.onLeftClick = onLeftClick
+        view.onRightClick = onRightClick
+    }
+
+    final class RouterView: NSView {
+        var onLeftClick: (() -> Void)?
+        var onRightClick: (() -> Void)?
+
+        // Claim the mouse sequence so mouseUp is delivered here.
+        override func mouseDown(with event: NSEvent) {}
+
+        override func mouseUp(with event: NSEvent) {
+            // Only a click that ends inside counts (a drag that leaves cancels).
+            let point = convert(event.locationInWindow, from: nil)
+            if bounds.contains(point) { onLeftClick?() }
+        }
+
+        override func rightMouseDown(with event: NSEvent) {
+            onRightClick?()
+        }
+
+        // Be the hit target for clicks over the title's frame.
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            bounds.contains(convert(point, from: superview)) ? self : nil
+        }
     }
 }

@@ -85,6 +85,16 @@ public struct NotionTask: Identifiable, Equatable, Codable {
             url: url)
     }
 
+    /// A copy with a new title, keeping every other field. Used by the inline
+    /// rename write path (#28), the mirror of `withStatus`.
+    public func withTitle(_ newTitle: String) -> NotionTask {
+        NotionTask(
+            id: id, title: newTitle, status: status, priority: priority,
+            dueDate: dueDate, category: category, startFrom: startFrom,
+            createdTime: createdTime, lastEditedTime: lastEditedTime, workType: workType,
+            url: url)
+    }
+
     /// The task's page URL as a value the view can hand to `NSWorkspace` (#21).
     /// `nil` when the page URL is absent or malformed.
     public var webURL: URL? {
