@@ -11,10 +11,17 @@ tasks that are late or due today. Click it to drop the task panel:
 
 <p align="center">
   <img src="docs/images/task-list.png" width="440"
-       alt="The Notion Tasks menu bar item — a checklist icon with an attention count — with its panel open below, showing tasks grouped by priority (P0/P1/P2) with colour-coded due dates and a per-row status menu">
+       alt="The Notion Tasks menu bar item — a checklist icon with an attention count — with its panel open below, showing tasks grouped by priority (P0/P1/P2) with colour-coded due dates, a per-row status menu, and add, search, refresh and settings icons in the header">
 </p>
 
 <table>
+  <tr>
+    <td colspan="2" align="center">
+      <img src="docs/images/search.png" width="460"
+           alt="The search field open below the header with the query 'board' typed; the list is filtered to the two matching tasks, still under their P0 and P1 group headers with the counts updated to (1)">
+      <br><b>Search</b> — click the magnifier by the + to filter the current view by title as you type; grouped views keep their headers, and a fruitless search offers one tap to widen to all open tasks.
+    </td>
+  </tr>
   <tr>
     <td width="50%" valign="top">
       <img src="docs/images/quick-add.png" width="100%"

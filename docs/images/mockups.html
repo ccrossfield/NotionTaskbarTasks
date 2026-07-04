@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Notion Tasks — README mockups</title>
+<!--
+  Faithful HTML mockups of the menu-bar popover, rendered to the docs/images/*.png
+  used in the README. The layout, colours (priority dots + ADR-0003 adaptive
+  due-date tints), and preset/status wording are taken from the app source;
+  the tasks are illustrative sample data (the repo is public, so no real Notion
+  data). Authored at final pixel size (920px wide) and rendered at scale 1.
+
+  Regenerate with:  bash docs/images/render.sh
+  Each scene is isolated for capture via ?scene=<name>; with no query the page
+  shows every scene stacked for eyeballing in a browser.
+-->
+<style>
+  :root {
+    --l-desk-top:#c9d2d9; --l-desk-bot:#aab7c1;
+    --l-bar:#41444b; --l-bar-text:#ececed;
+    --l-panel:#f4f3f1; --l-title:#1c1c1e; --l-text:#1c1c1e;
+    --l-secondary:#8a8a8e; --l-divider:#e3e2df; --l-field:#ffffff;
+    --l-field-border:#d6d5d2; --l-overdue:#b81f1a; --l-today:#cc5905; --l-soon:#b37505;
+    --l-icon:#2c2c2e; --l-chip:#e8e7e4;
+
+    --d-desk-top:#0f131a; --d-desk-bot:#181d26;
+    --d-bar:#1b1d23; --d-bar-text:#e6e6e8;
+    --d-panel:#2b2b30; --d-title:#f3f3f6; --d-text:#f0f0f3;
+    --d-secondary:#9a9aa1; --d-divider:rgba(255,255,255,.09); --d-field:#3a3a40;
+    --d-field-border:rgba(255,255,255,.14); --d-overdue:#ff7361; --d-today:#ff9e3d; --d-soon:#ffbf47;
+    --d-icon:#e0e0e4; --d-chip:#3a3a40;
+
+    --accent:#0a84ff; --p0:#ff3b30; --p1:#ff9500; --p2:#34c759;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html,body { background:#5b6570; }
+  body { font-family:-apple-system,"SF Pro Text","Helvetica Neue",Arial,sans-serif; -webkit-font-smoothing:antialiased; }
+  body.gallery { padding:40px; display:flex; flex-wrap:wrap; gap:40px; align-items:flex-start; }
+
+  .scene { position:relative; width:920px; overflow:hidden; }
+  .scene .desk { position:absolute; inset:0; }
+  .scene.light .desk { background:linear-gradient(180deg,var(--l-desk-top),var(--l-desk-bot)); }
+  .scene.dark  .desk { background:linear-gradient(180deg,var(--d-desk-top),var(--d-desk-bot)); }
+
+  /* menu bar */
+  .bar { position:relative; height:52px; display:flex; align-items:center; justify-content:flex-end;
+         gap:26px; padding:0 30px 0 0; font-size:26px; font-weight:500; }
+  .scene.light .bar { background:var(--l-bar); color:var(--l-bar-text); }
+  .scene.dark  .bar { background:var(--d-bar); color:var(--d-bar-text); }
+  .bar svg { display:block; }
+  .bar .appicon { display:flex; align-items:center; gap:10px; padding:5px 12px; border-radius:8px; }
+  .bar .appicon.sel { background:rgba(255,255,255,.22); }
+  .bar .clock { font-variant-numeric:tabular-nums; letter-spacing:.2px; }
+
+  /* panel */
+  .panel { position:absolute; top:66px; left:176px; width:680px; border-radius:18px;
+           padding:24px 26px 8px; }
+  .scene.light .panel { background:var(--l-panel); box-shadow:0 16px 44px rgba(20,28,40,.34); }
+  .scene.dark  .panel { background:var(--d-panel); box-shadow:0 16px 48px rgba(0,0,0,.55); }
+
+  .phead { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+  .ptitle { font-size:30px; font-weight:700; letter-spacing:-.3px; }
+  .scene.light .ptitle { color:var(--l-title); } .scene.dark .ptitle { color:var(--d-title); }
+  .phead .spacer { flex:1; }
+  .hicons { display:flex; align-items:center; gap:20px; }
+  .scene.light .hicons { color:var(--l-icon); } .scene.dark .hicons { color:var(--d-icon); }
+  .hicons .active { color:var(--accent); }
+  .tchev { opacity:.9; }
+
+  /* group header */
+  .ghead { display:flex; align-items:center; gap:10px; padding:16px 0 4px; font-size:22px; font-weight:700; }
+  .scene.light .ghead { color:var(--l-text); } .scene.dark .ghead { color:var(--d-text); }
+  .dot { width:14px; height:14px; border-radius:50%; display:inline-block; }
+  .ghead .count { font-weight:600; }
+  .scene.light .ghead .count { color:var(--l-secondary); } .scene.dark .ghead .count { color:var(--d-secondary); }
+  .scene.light .ghead.np { color:var(--l-secondary); } .scene.dark .ghead.np { color:var(--d-secondary); }
+
+  /* rows */
+  .row { display:flex; align-items:flex-start; gap:16px; padding:14px 0 13px; }
+  .cbx { flex:0 0 auto; margin-top:2px; }
+  .scene.light .cbx { color:#43434a; } .scene.dark .cbx { color:#c7c7cd; }
+  .rmain { flex:1; min-width:0; }
+  .rtitle { font-size:27px; letter-spacing:-.2px; }
+  .scene.light .rtitle { color:var(--l-text); } .scene.dark .rtitle { color:var(--d-text); }
+  .rtitle b { font-weight:600; }
+  .meta { font-size:21px; margin-top:6px; }
+  .scene.light .meta { color:var(--l-secondary); } .scene.dark .meta { color:var(--d-secondary); }
+  .meta .mdot { width:12px; height:12px; border-radius:50%; display:inline-block; vertical-align:middle; margin-right:2px; position:relative; top:-1px; }
+  .meta .overdue { font-weight:600; }
+  .light .overdue { color:var(--l-overdue);} .dark .overdue { color:var(--d-overdue);}
+  .light .today { color:var(--l-today);} .dark .today { color:var(--d-today);}
+  .light .soon  { color:var(--l-soon);}  .dark .soon  { color:var(--d-soon);}
+  .status { flex:0 0 auto; display:flex; align-items:center; gap:6px; font-size:21px; margin-top:2px; }
+  .scene.light .status { color:var(--l-secondary); } .scene.dark .status { color:var(--d-secondary); }
+  .divider { height:1px; }
+  .scene.light .divider { background:var(--l-divider); } .scene.dark .divider { background:var(--d-divider); }
+
+  /* input row (composer + search) */
+  .field { display:flex; align-items:center; gap:12px; border-radius:9px; padding:14px 16px; font-size:25px; }
+  .scene.light .field { background:var(--l-field); border:1px solid var(--l-field-border); color:var(--l-title); }
+  .scene.dark  .field { background:var(--d-field); border:1px solid var(--d-field-border); color:var(--d-title); }
+  .field .grow { flex:1; }
+  .field .clear { opacity:.5; }
+
+  .composerbar { display:flex; align-items:center; gap:22px; padding:16px 2px 2px; font-size:22px; }
+  .scene.light .composerbar { color:var(--l-secondary); } .scene.dark .composerbar { color:var(--d-secondary); }
+  .composerbar .chipm { display:flex; align-items:center; gap:6px; }
+  .scene.light .composerbar .chipm { color:var(--l-title); } .scene.dark .composerbar .chipm { color:var(--d-title); }
+  .composerbar .push { flex:1; }
+  .btn-add { background:var(--accent); color:#fff; font-weight:600; padding:9px 20px; border-radius:8px; font-size:22px; }
+
+  /* custom controls */
+  .controls { display:flex; align-items:center; gap:26px; padding:16px 0 6px; font-size:22px; }
+  .scene.light .controls { color:var(--l-text); } .scene.dark .controls { color:var(--d-text); }
+  .controls .c { display:flex; align-items:center; gap:8px; }
+
+  /* connect */
+  .connect-text { font-size:25px; line-height:1.35; padding:14px 0 4px; }
+  .scene.light .connect-text { color:var(--l-secondary); } .scene.dark .connect-text { color:var(--d-secondary); }
+  .secure { letter-spacing:2px; font-size:26px; }
+  .scene.light .secure { color:#4a4a4c; } .scene.dark .secure { color:#c9c9cf; }
+  .btn-connect { display:inline-block; background:var(--accent); color:#fff; font-weight:600; padding:12px 26px; border-radius:9px; font-size:24px; margin:18px 0 6px; }
+
+  /* single-scene capture: strip gallery chrome, size body to the scene */
+  body.single { padding:0; }
+  body.single .scene { margin:0; }
+</style>
+</head>
+<body class="gallery">
+
+<!-- ============ SCENE: task-list (hero) ============ -->
+<div class="scene light" data-scene="task-list" style="height:960px">
+  <div class="desk"></div>
+  <div class="bar">
+    <span class="appicon sel">
+      <svg width="30" height="24" viewBox="0 0 28 22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5l2.5 2.5L9 3"/><path d="M13 5h13"/><path d="M2 13l2.5 2.5L9 11"/><path d="M13 13h13"/></svg>
+      <span>2</span>
+    </span>
+    <svg width="30" height="22" viewBox="0 0 24 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 6a15 15 0 0 1 20 0"/><path d="M5.5 9.5a10 10 0 0 1 13 0"/><path d="M9 13a5 5 0 0 1 6 0"/><circle cx="12" cy="16.2" r="1.1" fill="currentColor" stroke="none"/></svg>
+    <svg width="38" height="20" viewBox="0 0 32 15" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="1" y="1.5" width="26" height="12" rx="3"/><rect x="3.4" y="3.9" width="17" height="7.2" rx="1.4" fill="currentColor" stroke="none"/><rect x="28.4" y="5.2" width="2.6" height="4.6" rx="1" fill="currentColor" stroke="none"/></svg>
+    <span class="clock">Sat 4 Jul&nbsp;&nbsp;12:04</span>
+  </div>
+
+  <div class="panel">
+    <div class="phead">
+      <span class="ptitle">Pivotal Priorities</span>
+      <svg class="tchev" width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>
+      <span class="spacer"></span>
+      <span class="hicons">
+        <svg width="30" height="30" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
+        <svg width="27" height="27" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="7" cy="7" r="4.3"/><path d="M10.2 10.2l3.4 3.4"/></svg>
+        <svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.7-3.98"/><path d="M13.6 3.1v3.1h-3.1"/></svg>
+        <svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"><circle cx="12" cy="12" r="2.7"/><path d="M19.4 13a7.8 7.8 0 000-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 00-1.7-1L15 2.5h-4l-.3 2.4a7.6 7.6 0 00-1.7 1l-2.5-1-2 3.5L6.6 11a7.8 7.8 0 000 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1l.3 2.4h4l.3-2.4c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5z"/></svg>
+      </span>
+    </div>
+
+    <div class="ghead"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg><span class="dot" style="background:var(--p0)"></span>P0 <span class="count">(2)</span></div>
+    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Finalise Q3 credit proposal</div><div class="meta"><span class="overdue">Overdue</span> · Work</div></div><div class="status">To Do <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg></div></div>
+    <div class="divider"></div>
+    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Send board pack to directors</div><div class="meta"><span class="today">Today</span> · Work</div></div><div class="status">In Progress <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg></div></div>
+    <div class="divider"></div>
+
+    <div class="ghead"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg><span class="dot" style="background:var(--p1)"></span>P1 <span class="count">(3)</span></div>
+    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Review lender term sheet</div><div class="meta"><span class="soon">Tomorrow</span> · Work</div></div><div class="status">To Do <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg></div></div>
+    <div class="divider"></div>
+    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Prep Monday leadership sync</div><div class="meta"><span class="soon">Thu</span> · Work</div></div><div class="status">Blocked <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg></div></div>
+    <div class="divider"></div>
+    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Update group cashflow model</div><div class="meta">11 Jul · Work</div></div><div class="status">To Do <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg></div></div>
+    <div class="divider"></div>
+
+    <div class="ghead"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg><span class="dot" style="background:var(--p2)"></span>P2 <span class="count">(1)</span></div>
+    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Read Fabric governance guide</div><div class="meta">Work</div></div><div class="status">To Do <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg></div></div>
+    <div class="divider"></div>
+
+    <div class="ghead np"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>No priority <span class="count">(4)</span></div>
+  </div>
+</div>
+
+<!-- ============ SCENE: search (new) ============ -->
+<div class="scene light" data-scene="search" style="height:600px">
+  <div class="desk"></div>
+  <div class="bar">
+    <span class="appicon sel">
+      <svg width="30" height="24" viewBox="0 0 28 22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5l2.5 2.5L9 3"/><path d="M13 5h13"/><path d="M2 13l2.5 2.5L9 11"/><path d="M13 13h13"/></svg>
+      <span>2</span>
+    </span>
+    <svg width="30" height="22" viewBox="0 0 24 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 6a15 15 0 0 1 20 0"/><path d="M5.5 9.5a10 10 0 0 1 13 0"/><path d="M9 13a5 5 0 0 1 6 0"/><circle cx="12" cy="16.2" r="1.1" fill="currentColor" stroke="none"/></svg>
+    <svg width="38" height="20" viewBox="0 0 32 15" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="1" y="1.5" width="26" height="12" rx="3"/><rect x="3.4" y="3.9" width="17" height="7.2" rx="1.4" fill="currentColor" stroke="none"/><rect x="28.4" y="5.2" width="2.6" height="4.6" rx="1" fill="currentColor" stroke="none"/></svg>
+    <span class="clock">Sat 4 Jul&nbsp;&nbsp;12:04</span>
+  </div>
+
+  <div class="panel">
+    <div class="phead">
+      <span class="ptitle">Pivotal Priorities</span>
+      <svg class="tchev" width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>
+      <span class="spacer"></span>
+      <span class="hicons">
+        <svg width="30" height="30" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
+        <svg class="active" width="27" height="27" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="7" cy="7" r="4.3"/><path d="M10.2 10.2l3.4 3.4"/></svg>
+        <svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.7-3.98"/><path d="M13.6 3.1v3.1h-3.1"/></svg>
+        <svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"><circle cx="12" cy="12" r="2.7"/><path d="M19.4 13a7.8 7.8 0 000-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 00-1.7-1L15 2.5h-4l-.3 2.4a7.6 7.6 0 00-1.7 1l-2.5-1-2 3.5L6.6 11a7.8 7.8 0 000 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1l.3 2.4h4l.3-2.4c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5z"/></svg>
+      </span>
+    </div>
+
+    <div class="field" style="margin:10px 0 6px">
+      <svg width="24" height="24" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" style="color:#8a8a8e"><circle cx="7" cy="7" r="4.3"/><path d="M10.2 10.2l3.4 3.4"/></svg>
+      <span class="grow">board</span>
+      <svg class="clear" width="24" height="24" viewBox="0 0 16 16" fill="#8a8a8e"><path d="M8 1.2A6.8 6.8 0 1 0 8 14.8 6.8 6.8 0 0 0 8 1.2zM10.6 9.7l-.9.9L8 8.9 6.3 10.6l-.9-.9L7.1 8 5.4 6.3l.9-.9L8 7.1l1.7-1.7.9.9L8.9 8z"/></svg>
+    </div>
+    <div class="divider"></div>
+
+    <div class="ghead"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg><span class="dot" style="background:var(--p0)"></span>P0 <span class="count">(1)</span></div>
+    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Send <b>board</b> pack to directors</div><div class="meta"><span class="today">Today</span> · Work</div></div><div class="status">In Progress <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg></div></div>
+    <div class="divider"></div>
+
+    <div class="ghead"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg><span class="dot" style="background:var(--p1)"></span>P1 <span class="count">(1)</span></div>
+    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Circulate <b>board</b> minutes</div><div class="meta"><span class="soon">Tomorrow</span> · Work</div></div><div class="status">To Do <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg></div></div>
+    <div class="divider"></div>
+  </div>
+</div>
+
+<!-- ============ SCENE: quick-add ============ -->
+<div class="scene light" data-scene="quick-add" style="height:600px">
+  <div class="desk"></div>
+  <div class="bar">
+    <span class="appicon sel">
+      <svg width="30" height="24" viewBox="0 0 28 22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5l2.5 2.5L9 3"/><path d="M13 5h13"/><path d="M2 13l2.5 2.5L9 11"/><path d="M13 13h13"/></svg>
+      <span>2</span>
+    </span>
+    <svg width="30" height="22" viewBox="0 0 24 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 6a15 15 0 0 1 20 0"/><path d="M5.5 9.5a10 10 0 0 1 13 0"/><path d="M9 13a5 5 0 0 1 6 0"/><circle cx="12" cy="16.2" r="1.1" fill="currentColor" stroke="none"/></svg>
+    <svg width="38" height="20" viewBox="0 0 32 15" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="1" y="1.5" width="26" height="12" rx="3"/><rect x="3.4" y="3.9" width="17" height="7.2" rx="1.4" fill="currentColor" stroke="none"/><rect x="28.4" y="5.2" width="2.6" height="4.6" rx="1" fill="currentColor" stroke="none"/></svg>
+    <span class="clock">Sat 4 Jul&nbsp;&nbsp;12:04</span>
+  </div>
+
+  <div class="panel">
+    <div class="phead">
+      <span class="ptitle">Pivotal Priorities</span>
+      <svg class="tchev" width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>
+      <span class="spacer"></span>
+      <span class="hicons">
+        <svg width="30" height="30" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
+        <svg width="27" height="27" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="7" cy="7" r="4.3"/><path d="M10.2 10.2l3.4 3.4"/></svg>
+        <svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.7-3.98"/><path d="M13.6 3.1v3.1h-3.1"/></svg>
+        <svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"><circle cx="12" cy="12" r="2.7"/><path d="M19.4 13a7.8 7.8 0 000-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 00-1.7-1L15 2.5h-4l-.3 2.4a7.6 7.6 0 00-1.7 1l-2.5-1-2 3.5L6.6 11a7.8 7.8 0 000 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1l.3 2.4h4l.3-2.4c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5z"/></svg>
+      </span>
+    </div>
+
+    <div class="field" style="margin:10px 0 4px">
+      <span class="grow">Send revised proposal to lender</span>
+    </div>
+    <div class="composerbar">
+      <span class="chipm">P1 <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg></span>
+      <span class="chipm">Work <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg></span>
+      <span class="chipm">Due Tomorrow <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg></span>
+      <span class="push"></span>
+      <span>Cancel</span>
+      <span class="btn-add">Add</span>
+    </div>
+    <div class="divider" style="margin-top:14px"></div>
+
+    <div class="ghead"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg><span class="dot" style="background:var(--p0)"></span>P0 <span class="count">(2)</span></div>
+    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Finalise Q3 credit proposal</div><div class="meta"><span class="overdue">Overdue</span> · Work</div></div><div class="status">To Do <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg></div></div>
+    <div class="divider"></div>
+    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Send board pack to directors</div><div class="meta"><span class="today">Today</span> · Work</div></div><div class="status">In Progress <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg></div></div>
+    <div class="divider"></div>
+  </div>
+</div>
+
+<!-- ============ SCENE: custom-view ============ -->
+<div class="scene light" data-scene="custom-view" style="height:820px">
+  <div class="desk"></div>
+  <div class="bar">
+    <span class="appicon sel">
+      <svg width="30" height="24" viewBox="0 0 28 22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5l2.5 2.5L9 3"/><path d="M13 5h13"/><path d="M2 13l2.5 2.5L9 11"/><path d="M13 13h13"/></svg>
+      <span>2</span>
+    </span>
+    <svg width="30" height="22" viewBox="0 0 24 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 6a15 15 0 0 1 20 0"/><path d="M5.5 9.5a10 10 0 0 1 13 0"/><path d="M9 13a5 5 0 0 1 6 0"/><circle cx="12" cy="16.2" r="1.1" fill="currentColor" stroke="none"/></svg>
+    <svg width="38" height="20" viewBox="0 0 32 15" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="1" y="1.5" width="26" height="12" rx="3"/><rect x="3.4" y="3.9" width="17" height="7.2" rx="1.4" fill="currentColor" stroke="none"/><rect x="28.4" y="5.2" width="2.6" height="4.6" rx="1" fill="currentColor" stroke="none"/></svg>
+    <span class="clock">Sat 4 Jul&nbsp;&nbsp;12:04</span>
+  </div>
+
+  <div class="panel">
+    <div class="phead">
+      <span class="ptitle">Custom</span>
+      <svg class="tchev" width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>
+      <span class="spacer"></span>
+      <span class="hicons">
+        <svg width="30" height="30" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
+        <svg width="27" height="27" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="7" cy="7" r="4.3"/><path d="M10.2 10.2l3.4 3.4"/></svg>
+        <svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.7-3.98"/><path d="M13.6 3.1v3.1h-3.1"/></svg>
+        <svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"><circle cx="12" cy="12" r="2.7"/><path d="M19.4 13a7.8 7.8 0 000-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 00-1.7-1L15 2.5h-4l-.3 2.4a7.6 7.6 0 00-1.7 1l-2.5-1-2 3.5L6.6 11a7.8 7.8 0 000 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1l.3 2.4h4l.3-2.4c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5z"/></svg>
+      </span>
+    </div>
+
+    <div class="controls">
+      <span class="c"><svg width="24" height="24" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="8" cy="8" r="6.6"/><path d="M4.6 6h6.8M5.6 8h4.8M6.7 10h2.6"/></svg> Filter</span>
+      <span class="c"><svg width="22" height="22" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v10M4.5 9.5L8 13l3.5-3.5"/></svg> Sort: Due date</span>
+    </div>
+    <div class="divider"></div>
+
+    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Finalise Q3 credit proposal</div><div class="meta"><span class="mdot" style="background:var(--p0)"></span>P0 · <span class="overdue">Overdue</span> · Work</div></div><div class="status">To Do <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg></div></div>
+    <div class="divider"></div>
+    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Send board pack to directors</div><div class="meta"><span class="mdot" style="background:var(--p0)"></span>P0 · <span class="today">Today</span> · Work</div></div><div class="status">In Progress <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg></div></div>
+    <div class="divider"></div>
+    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Review lender term sheet</div><div class="meta"><span class="mdot" style="background:var(--p1)"></span>P1 · <span class="soon">Tomorrow</span> · Work</div></div><div class="status">To Do <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg></div></div>
+    <div class="divider"></div>
+    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Chase outstanding KYC documents</div><div class="meta"><span class="mdot" style="background:var(--p1)"></span>P1 · <span class="soon">Thu</span> · Work</div></div><div class="status">Blocked <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg></div></div>
+    <div class="divider"></div>
+    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Update group cashflow model</div><div class="meta"><span class="mdot" style="background:var(--p1)"></span>P1 · 11 Jul · Work</div></div><div class="status">To Do <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg></div></div>
+    <div class="divider"></div>
+    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Read Fabric governance guide</div><div class="meta"><span class="mdot" style="background:var(--p2)"></span>P2 · Home</div></div><div class="status">To Do <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg></div></div>
+    <div class="divider"></div>
+  </div>
+</div>
+
+<!-- ============ SCENE: dark-mode ============ -->
+<div class="scene dark" data-scene="dark-mode" style="height:960px">
+  <div class="desk"></div>
+  <div class="bar">
+    <span class="appicon sel">
+      <svg width="30" height="24" viewBox="0 0 28 22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5l2.5 2.5L9 3"/><path d="M13 5h13"/><path d="M2 13l2.5 2.5L9 11"/><path d="M13 13h13"/></svg>
+      <span>2</span>
+    </span>
+    <svg width="30" height="22" viewBox="0 0 24 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 6a15 15 0 0 1 20 0"/><path d="M5.5 9.5a10 10 0 0 1 13 0"/><path d="M9 13a5 5 0 0 1 6 0"/><circle cx="12" cy="16.2" r="1.1" fill="currentColor" stroke="none"/></svg>
+    <svg width="38" height="20" viewBox="0 0 32 15" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="1" y="1.5" width="26" height="12" rx="3"/><rect x="3.4" y="3.9" width="17" height="7.2" rx="1.4" fill="currentColor" stroke="none"/><rect x="28.4" y="5.2" width="2.6" height="4.6" rx="1" fill="currentColor" stroke="none"/></svg>
+    <span class="clock">Sat 4 Jul&nbsp;&nbsp;12:04</span>
+  </div>
+
+  <div class="panel">
+    <div class="phead">
+      <span class="ptitle">Pivotal Priorities</span>
+      <svg class="tchev" width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>
+      <span class="spacer"></span>
+      <span class="hicons">
+        <svg width="30" height="30" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
+        <svg width="27" height="27" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="7" cy="7" r="4.3"/><path d="M10.2 10.2l3.4 3.4"/></svg>
+        <svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.7-3.98"/><path d="M13.6 3.1v3.1h-3.1"/></svg>
+        <svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"><circle cx="12" cy="12" r="2.7"/><path d="M19.4 13a7.8 7.8 0 000-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 00-1.7-1L15 2.5h-4l-.3 2.4a7.6 7.6 0 00-1.7 1l-2.5-1-2 3.5L6.6 11a7.8 7.8 0 000 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1l.3 2.4h4l.3-2.4c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5z"/></svg>
+      </span>
+    </div>
+
+    <div class="ghead"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg><span class="dot" style="background:var(--p0)"></span>P0 <span class="count">(2)</span></div>
+    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Finalise Q3 credit proposal</div><div class="meta"><span class="overdue">Overdue</span> · Work</div></div><div class="status">To Do <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg></div></div>
+    <div class="divider"></div>
+    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Send board pack to directors</div><div class="meta"><span class="today">Today</span> · Work</div></div><div class="status">In Progress <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg></div></div>
+    <div class="divider"></div>
+
+    <div class="ghead"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg><span class="dot" style="background:var(--p1)"></span>P1 <span class="count">(3)</span></div>
+    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Review lender term sheet</div><div class="meta"><span class="soon">Tomorrow</span> · Work</div></div><div class="status">To Do <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg></div></div>
+    <div class="divider"></div>
+    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Prep Monday leadership sync</div><div class="meta"><span class="soon">Thu</span> · Work</div></div><div class="status">Blocked <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg></div></div>
+    <div class="divider"></div>
+    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Update group cashflow model</div><div class="meta">11 Jul · Work</div></div><div class="status">To Do <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg></div></div>
+    <div class="divider"></div>
+
+    <div class="ghead"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg><span class="dot" style="background:var(--p2)"></span>P2 <span class="count">(1)</span></div>
+    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Read Fabric governance guide</div><div class="meta">Work</div></div><div class="status">To Do <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg></div></div>
+    <div class="divider"></div>
+
+    <div class="ghead np"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>No priority <span class="count">(4)</span></div>
+  </div>
+</div>
+
+<!-- ============ SCENE: connect (first run) ============ -->
+<div class="scene light" data-scene="connect" style="height:454px">
+  <div class="desk"></div>
+  <div class="bar">
+    <span class="appicon sel">
+      <svg width="30" height="24" viewBox="0 0 28 22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5l2.5 2.5L9 3"/><path d="M13 5h13"/><path d="M2 13l2.5 2.5L9 11"/><path d="M13 13h13"/></svg>
+    </span>
+    <svg width="30" height="22" viewBox="0 0 24 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 6a15 15 0 0 1 20 0"/><path d="M5.5 9.5a10 10 0 0 1 13 0"/><path d="M9 13a5 5 0 0 1 6 0"/><circle cx="12" cy="16.2" r="1.1" fill="currentColor" stroke="none"/></svg>
+    <svg width="38" height="20" viewBox="0 0 32 15" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="1" y="1.5" width="26" height="12" rx="3"/><rect x="3.4" y="3.9" width="17" height="7.2" rx="1.4" fill="currentColor" stroke="none"/><rect x="28.4" y="5.2" width="2.6" height="4.6" rx="1" fill="currentColor" stroke="none"/></svg>
+    <span class="clock">Sat 4 Jul&nbsp;&nbsp;12:04</span>
+  </div>
+
+  <div class="panel">
+    <div class="phead">
+      <span class="ptitle">Pivotal Priorities</span>
+      <svg class="tchev" width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>
+      <span class="spacer"></span>
+      <span class="hicons">
+        <svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"><circle cx="12" cy="12" r="2.7"/><path d="M19.4 13a7.8 7.8 0 000-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 00-1.7-1L15 2.5h-4l-.3 2.4a7.6 7.6 0 00-1.7 1l-2.5-1-2 3.5L6.6 11a7.8 7.8 0 000 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1l.3 2.4h4l.3-2.4c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5z"/></svg>
+      </span>
+    </div>
+
+    <div class="connect-text">Paste a Notion internal integration token to connect. It's stored in your Keychain.</div>
+    <div class="field" style="margin:8px 0 4px"><span class="secure grow">••••••••••••••••••••</span></div>
+    <span class="btn-connect">Connect</span>
+  </div>
+</div>
+
+<script>
+  const scene = new URLSearchParams(location.search).get('scene');
+  if (scene) {
+    document.body.classList.remove('gallery');
+    document.body.classList.add('single');
+    document.querySelectorAll('.scene').forEach(el => { if (el.dataset.scene !== scene) el.remove(); });
+  }
+</script>
+</body>
+</html>
