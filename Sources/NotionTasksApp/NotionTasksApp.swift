@@ -137,9 +137,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    /// One cancel policy for both Esc routes: an open composer consumes the
-    /// cancel; otherwise the panel closes (#22).
+    /// One cancel policy for both Esc routes: an inline rename absorbs the
+    /// first Esc (cancelling the edit, #28), then an open composer (#22);
+    /// otherwise the panel closes.
     private func handleCancel() -> Bool {
+        if model.editingTaskID != nil {
+            model.cancelEditing()
+            return true
+        }
         guard model.isComposing else { return false }
         model.closeComposer()
         return true
@@ -272,6 +277,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        // Closing the panel is a click-away: commit any inline rename before
+        // the field is torn down, so the edit isn't lost (#28). Esc has
+        // already cleared the edit via handleCancel, so this is a no-op there.
+        model.commitEditing()
         statusItem?.button?.highlight(false)
         if let outsideClickMonitor {
             NSEvent.removeMonitor(outsideClickMonitor)

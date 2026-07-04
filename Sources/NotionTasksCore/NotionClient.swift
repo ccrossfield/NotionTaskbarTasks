@@ -151,6 +151,20 @@ public struct NotionClient {
         _ = try await send(request)
     }
 
+    /// Renames a task's page (#28): PATCH the title property with the same
+    /// `{"title":[{"text":{"content":...}}]}` shape the create path uses.
+    ///
+    /// `titleProperty` is the schema-resolved title property name, keyed by
+    /// name like the create payload, so a rename of the property in Notion is
+    /// carried through the same way (the decoder's find-by-type resolution).
+    public func updateTitle(pageID: String, to newTitle: String, titleProperty: String) async throws {
+        let request = makeRequest(
+            path: "pages/\(pageID)",
+            method: "PATCH",
+            jsonBody: ["properties": [titleProperty: ["title": [["text": ["content": newTitle]]]]]])
+        _ = try await send(request)
+    }
+
     private func makeRequest(path: String, method: String, jsonBody: Any? = nil) -> URLRequest {
         var request = URLRequest(url: URL(string: "https://api.notion.com/v1/\(path)")!)
         request.httpMethod = method

@@ -70,6 +70,15 @@ public final class AppModel: ObservableObject {
     /// the task lands invisibly. One-shot: the view clears it after showing
     /// it; the next create or refresh clears it too.
     @Published public private(set) var createNotice: String?
+    /// The task whose title is being renamed inline (#28), or nil. Model-owned
+    /// like `isComposing`, for two reasons: the app shell can commit or cancel
+    /// the edit around panel teardown, and the poll loop can hold off while a
+    /// rename is open so a wholesale refresh never clobbers it.
+    @Published public private(set) var editingTaskID: String?
+    /// The live text of the inline rename (#28). The editor field reads and
+    /// writes it through here, so whatever is typed is committable from the
+    /// shell even as the panel closes.
+    @Published public private(set) var editingDraft = ""
 
     private let tokenStore: TokenStore
     private let cache: TaskCache?
@@ -194,6 +203,85 @@ public final class AppModel: ObservableObject {
         }
     }
 
+    /// Rename a task and persist it to Notion (#28). Optimistic, unlike the
+    /// pessimistic status path: the row shows the new title at once and the
+    /// PATCH runs behind it, because a half-committed text edit has no sensible
+    /// "pending" visual. A failure rolls the title back and surfaces
+    /// `writeError`. An empty or unchanged title is a no-op: no blank tasks, no
+    /// pointless writes.
+    public func setTitle(taskID: String, to newTitle: String) async {
+        guard case .loaded(let current) = state else { return }
+        guard let token = tokenStore.read(), !token.isEmpty else { return }
+        guard let original = current.first(where: { $0.id == taskID }) else { return }
+        let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Empty reverts to the original (a blank task is unrecoverable from
+        // this UI); an unchanged title isn't worth a round-trip.
+        guard !trimmed.isEmpty, trimmed != original.title else { return }
+        writeError = nil
+        // Show the rename immediately; the write catches up.
+        applyTitle(trimmed, to: taskID)
+        do {
+            try await makeClient(token).updateTitle(
+                pageID: taskID, to: trimmed, titleProperty: titleProperty)
+            // Re-assert after the await: a refresh may have landed Notion's
+            // pre-rename copy while the PATCH was in flight, so re-apply to be
+            // sure the confirmed rename sticks (the issue #12 pattern).
+            applyTitle(trimmed, to: taskID)
+        } catch NotionClientError.unauthorized {
+            // The token died between load and write. Roll back the optimistic
+            // rename, then route to reconnect like every write path (#13).
+            applyTitle(original.title, to: taskID)
+            try? tokenStore.delete()
+            state = .failed("Notion rejected the stored token, so that rename wasn't saved. Enter a new token to reconnect.")
+        } catch {
+            // Roll the title back to what Notion still holds and say so.
+            applyTitle(original.title, to: taskID)
+            writeError = "Couldn't rename that task in Notion; the title is unchanged. Try again."
+        }
+    }
+
+    /// Set a task's title in the loaded state and keep the cache in step,
+    /// re-reading state each call so it is safe across the write's await
+    /// suspension point (issue #12). The mirror of `setStatus`'s in-place map.
+    private func applyTitle(_ title: String, to taskID: String) {
+        guard case .loaded(let current) = state else { return }
+        let updated = current.map { $0.id == taskID ? $0.withTitle(title) : $0 }
+        state = .loaded(updated)
+        cache?.save(CachedSnapshot(
+            tasks: updated, openStatuses: openStatuses, workCategory: workCategory,
+            personalCategories: personalCategories, schemaOptions: schemaOptions,
+            fetchedAt: lastRefreshed ?? now()))
+    }
+
+    /// Begin renaming a task inline (#28). Any rename already open on another
+    /// row is committed first, so switching rows never silently drops an edit.
+    public func beginEditing(taskID: String, title: String) {
+        if let open = editingTaskID, open != taskID { commitEditing() }
+        writeError = nil
+        editingTaskID = taskID
+        editingDraft = title
+    }
+
+    /// The editor field pushes each keystroke back through here (#28).
+    public func setEditingDraft(_ text: String) { editingDraft = text }
+
+    /// Commit the inline rename: leave edit mode at once, then persist the
+    /// draft optimistically behind it (#28). A no-op when nothing is being
+    /// edited, so the shell can call it unconditionally as the panel closes.
+    public func commitEditing() {
+        guard let taskID = editingTaskID else { return }
+        let draft = editingDraft
+        editingTaskID = nil
+        editingDraft = ""
+        Task { await setTitle(taskID: taskID, to: draft) }
+    }
+
+    /// Abandon the inline rename without writing (#28) — the Escape path.
+    public func cancelEditing() {
+        editingTaskID = nil
+        editingDraft = ""
+    }
+
     /// Open the quick-add composer (#22). Messages from the previous
     /// composition die here — they belong to a draft that no longer exists.
     public func openComposer() {
@@ -305,6 +393,9 @@ public final class AppModel: ObservableObject {
             while !Task.isCancelled {
                 await pollSleep(interval)
                 guard !Task.isCancelled, let self else { return }
+                // A wholesale refresh would clobber an inline rename in
+                // progress (#28); skip this tick, the next one refreshes.
+                if self.editingTaskID != nil { continue }
                 await self.refresh()
             }
         }

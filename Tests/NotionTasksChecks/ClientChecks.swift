@@ -172,6 +172,48 @@ func clientChecks(_ t: CheckRun) async {
         }
     }
 
+    await t.test("updateTitle PATCHes the page with the title shape, keyed by the resolved name (#28)") {
+        let stub = StubHTTPClient(responseData: Data(), statusCode: 200)
+        let client = NotionClient(dataSourceID: dataSource, token: "ntn_test", http: stub)
+
+        try await client.updateTitle(pageID: "page-123", to: "New name",
+                                     titleProperty: "Renamed title")
+
+        let request = try require(stub.lastRequest)
+        t.expect(request.httpMethod == "PATCH", "method was \(request.httpMethod ?? "nil")")
+        t.expect(request.url?.absoluteString == "https://api.notion.com/v1/pages/page-123",
+                 "url was \(request.url?.absoluteString ?? "nil")")
+        t.expect(request.value(forHTTPHeaderField: "Notion-Version") == "2025-09-03", "version header")
+        t.expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer ntn_test", "auth header")
+
+        // Exactly {"properties":{<name>:{"title":[{"text":{"content":...}}]}}}.
+        let body = try require(request.httpBody)
+        let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        t.expect((json?.keys.sorted() ?? []) == ["properties"],
+                 "top-level keys were \(json?.keys.sorted() ?? [])")
+        let props = json?["properties"] as? [String: Any]
+        // The title is keyed by the resolved property name, so a rename of the
+        // property in Notion is carried through like the create path.
+        t.expect(props?.keys.sorted() == ["Renamed title"],
+                 "title should be keyed by the resolved name, keys were \(props?.keys.sorted() ?? [])")
+        let content = (((props?["Renamed title"] as? [String: Any])?["title"]
+            as? [[String: Any]])?.first?["text"] as? [String: Any])?["content"] as? String
+        t.expect(content == "New name", "title content was \(content ?? "nil")")
+    }
+
+    await t.test("a failed title write throws (#28)") {
+        let stub = StubHTTPClient(responseData: Data(), statusCode: 500)
+        let client = NotionClient(dataSourceID: dataSource, token: "t", http: stub)
+        do {
+            try await client.updateTitle(pageID: "p", to: "New name", titleProperty: "Task")
+            t.expect(false, "expected updateTitle to throw")
+        } catch NotionClientError.httpError(let code) {
+            t.expectEqual(code, 500)
+        } catch {
+            t.expect(false, "wrong error: \(error)")
+        }
+    }
+
     t.suite("NotionClient pagination")
 
     // A minimal query-response page: one task, plus the paging fields. The real
