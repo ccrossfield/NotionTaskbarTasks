@@ -33,6 +33,16 @@ private final class TaskPanel: NSPanel {
     }
 }
 
+/// The floating panel behind the quick-capture window and the shortcut recorder
+/// (#34). Borderless and non-activating like `TaskPanel`, but able to become key
+/// so its text field / key recorder gets input. `cancelOperation` (Esc,
+/// ⌘-period) routes to `onCancel`.
+private final class KeyPanel: NSPanel {
+    var onCancel: (() -> Void)?
+    override var canBecomeKey: Bool { true }
+    override func cancelOperation(_ sender: Any?) { onCancel?() }
+}
+
 /// Reports SwiftUI content-size changes upward so the window can follow:
 /// state transitions (token entry ↔ loaded ↔ failed, error captions coming
 /// and going) change the panel's height while it is open.
@@ -71,19 +81,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         app.run()
     }
 
-    private let model = AppModel(
-        tokenStore: KeychainTokenStore(),
-        cache: FileTaskCache(),
-        preferences: UserDefaultsPreferences(),
-        loginItem: MainAppLoginItem(),
-        makeClient: { token in NotionClient(token: token, http: URLSession.shared) }
-    )
+    /// The real global-hotkey service (#34). Held so the shell can wire its
+    /// fire action; the model drives its (re-)registration.
+    private let hotKeyService: CarbonHotKeyService
+    private let model: AppModel
+    /// The quick-capture window's draft (#34), shared with `CaptureView`.
+    private let captureModel = CaptureModel()
+
+    override init() {
+        let hotKeyService = CarbonHotKeyService()
+        self.hotKeyService = hotKeyService
+        self.model = AppModel(
+            tokenStore: KeychainTokenStore(),
+            cache: FileTaskCache(),
+            preferences: UserDefaultsPreferences(),
+            loginItem: MainAppLoginItem(),
+            hotKeyService: hotKeyService,
+            makeClient: { token in NotionClient(token: token, http: URLSession.shared) }
+        )
+        super.init()
+    }
 
     private var statusItem: NSStatusItem?
     private var panel: TaskPanel?
     private var hostingView: PanelHostingView?
+    // The quick-capture window (#34): a second floating panel, independent of
+    // the status-icon panel. Built once and repositioned on each open.
+    private var capturePanel: KeyPanel?
+    private var captureHostingView: NSHostingView<AnyView>?
+    /// The single most-recent discarded capture title (#34), restored on the
+    /// next open. In-memory only, per the issue — never persisted to disk.
+    private var lastDiscardedTitle: String?
+    private var captureIsTearingDown = false
+    // The shortcut recorder (#34), shown only while recording a new combination.
+    private var recorderPanel: KeyPanel?
+    private var recorderHostingView: NSHostingView<AnyView>?
+    private var recorderIsTearingDown = false
     private var cancellables: Set<AnyCancellable> = []
-    private var escMonitor: Any?
+    private var keyMonitor: Any?
     private var outsideClickMonitor: Any?
 
     // The feel-parity knobs (#20): chrome tuned to match the MenuBarExtra
@@ -122,13 +157,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             .sink { [weak self] _ in self?.updateBadge() }
             .store(in: &cancellables)
 
+        // The global quick-capture hotkey (#34): wire the fire action first, so
+        // the very first press has somewhere to go, then register the persisted
+        // (or default ⌥Space) combination.
+        hotKeyService.onFire = { [weak self] in self?.openCapture() }
+        model.registerHotKey()
+
         // Panel key handling seen before the responder chain. Esc dismisses the
         // panel like a menu — except an open rename/composer/search absorbs the
         // first Esc, closing that instead (#22/#28/#32). ⌘F opens the search row
         // (#32). cancelOperation (via `onCancel`) covers the Esc routes that
         // bypass this, e.g. ⌘-period.
-        escMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, let panel = self.panel, panel.isVisible else { return event }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            // The recorder's first responder owns every key while it's up (#34).
+            if self.recorderPanel?.isKeyWindow == true { return event }
+            // The capture window handles its own Esc; other keys flow to its
+            // title field. It must take precedence over the main panel below.
+            if self.capturePanel?.isKeyWindow == true {
+                if event.keyCode == 53 { self.dismissCapture(); return nil }
+                return event
+            }
+            guard let panel = self.panel, panel.isVisible, panel.isKeyWindow else { return event }
             // ⌘F (keyCode 3), command only: reveal and focus the search row.
             if event.keyCode == 3,
                event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command {
@@ -219,7 +269,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// Build once, reuse across opens: keeps SwiftUI view state (the token
     /// field's draft) and spares a hosting-view rebuild per click.
     private func makePanel() -> TaskPanel {
-        let hosting = PanelHostingView(rootView: AnyView(ContentView().environmentObject(model)))
+        let hosting = PanelHostingView(rootView: AnyView(
+            ContentView(onRecordShortcut: { [weak self] in self?.beginRecordingHotKey() })
+                .environmentObject(model)))
         hosting.translatesAutoresizingMaskIntoConstraints = false
         hosting.onSizeChange = { [weak self] in
             // Deferred: invalidation arrives mid-layout, and setFrame from
@@ -282,14 +334,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                        display: true)
     }
 
-    // MARK: NSWindowDelegate (the panel)
+    // MARK: NSWindowDelegate (all three panels share this delegate)
 
-    /// Key moving elsewhere is a click outside — dismiss, like a menu.
+    /// Key moving elsewhere is a click outside — dismiss, like a menu. Each
+    /// panel has its own rule, so branch on which one resigned (#34).
     func windowDidResignKey(_ notification: Notification) {
-        panel?.close()
+        let window = notification.object as? NSWindow
+        if window === capturePanel {
+            // A click away from the capture window dismisses it, remembering any
+            // unsubmitted draft (#34).
+            dismissCapture()
+        } else if window === recorderPanel {
+            endRecording() // clicking away cancels recording
+        } else if window === panel {
+            // Opening the capture window or recorder steals key from the main
+            // panel; that must not dismiss it — the two surfaces don't interact.
+            if capturePanel?.isVisible == true || recorderPanel?.isVisible == true { return }
+            panel?.close()
+        }
     }
 
     func windowWillClose(_ notification: Notification) {
+        // Only the main panel needs teardown; the capture window and recorder
+        // clean themselves up in their dismiss paths (#34).
+        guard notification.object as? NSWindow === panel else { return }
         // Closing the panel is a click-away: commit any inline rename before
         // the field is torn down, so the edit isn't lost (#28). Esc has
         // already cleared the edit via handleCancel, so this is a no-op there.
@@ -297,10 +365,163 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // A dismissed panel starts clean next open: drop any search (#32), so
         // reopening never shows a stale filter hiding most tasks.
         model.closeSearch()
+        // A capture failure is surfaced while the panel is open; drop it on
+        // close so the next open is clean unless a fresh capture failed since
+        // (#34).
+        model.clearCaptureError()
         statusItem?.button?.highlight(false)
         if let outsideClickMonitor {
             NSEvent.removeMonitor(outsideClickMonitor)
             self.outsideClickMonitor = nil
         }
+    }
+
+    // MARK: Quick-capture window (#34)
+
+    /// The hotkey fired: open the floating capture window, centred on the screen
+    /// under the cursor. With no token stored there is nowhere to capture into,
+    /// so open the main panel's token-entry screen instead. If the window is
+    /// already up, just re-focus it — never a second instance — leaving the
+    /// draft untouched and the main panel exactly as it was.
+    private func openCapture() {
+        if case .needsToken = model.state {
+            openPanel()
+            return
+        }
+        if let capturePanel, capturePanel.isVisible {
+            capturePanel.makeKeyAndOrderFront(nil)
+            captureModel.focusToken += 1
+            return
+        }
+        // Seed the view-aware defaults for the persisted preset (#22), then
+        // restore the last discarded title over the top — chip selections are
+        // not remembered, only the title text (#34).
+        var draft = model.composerDraft()
+        draft.title = lastDiscardedTitle ?? ""
+        captureModel.draft = draft
+        captureModel.focusToken += 1
+        let panel = capturePanel ?? makeCapturePanel()
+        layout(panel, size: captureHostingView?.fittingSize ?? NSSize(width: 560, height: 120),
+               verticalBias: 0.62)
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    /// Enter in the capture window: create the task optimistically and close at
+    /// once (#34). The draft was submitted, not discarded, so forget it.
+    private func commitCapture() {
+        guard let capturePanel, capturePanel.isVisible, !captureIsTearingDown else { return }
+        let draft = captureModel.draft
+        guard !draft.trimmedTitle.isEmpty else { return }
+        lastDiscardedTitle = nil
+        captureIsTearingDown = true
+        capturePanel.orderOut(nil)
+        captureIsTearingDown = false
+        Task { await model.captureTask(draft) }
+    }
+
+    /// Esc or a click away: close the capture window, remembering a typed-but-
+    /// unsubmitted title so the next open restores it (#34). Guarded so the
+    /// resign-key that ordering-out itself triggers can't re-enter and clobber
+    /// the remembered/forgotten title.
+    private func dismissCapture() {
+        guard let capturePanel, capturePanel.isVisible, !captureIsTearingDown else { return }
+        let trimmed = captureModel.draft.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        lastDiscardedTitle = trimmed.isEmpty ? nil : trimmed
+        captureIsTearingDown = true
+        capturePanel.orderOut(nil)
+        captureIsTearingDown = false
+    }
+
+    /// Build a borderless, non-activating, key-capable floating panel with the
+    /// shared quick-capture chrome (#34): pop-up-menu level, joins all spaces,
+    /// no animation, and a clear background so the shadow follows the rounded
+    /// SwiftUI content the caller supplies (not the frosted `.menu` panel
+    /// chrome). Behind both the capture window and the shortcut recorder.
+    private func makeKeyPanel(size: NSSize, content: NSView,
+                              onCancel: @escaping () -> Void) -> KeyPanel {
+        let panel = KeyPanel(contentRect: NSRect(origin: .zero, size: size),
+                             styleMask: [.borderless, .nonactivatingPanel],
+                             backing: .buffered, defer: true)
+        panel.contentView = content
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.level = .popUpMenu
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.isMovable = false
+        panel.hidesOnDeactivate = false
+        panel.isReleasedWhenClosed = false
+        panel.animationBehavior = .none
+        panel.delegate = self
+        panel.onCancel = onCancel
+        return panel
+    }
+
+    /// Build the capture panel once and reuse it (#34). Its rounded material
+    /// chrome is drawn by `CaptureView`.
+    private func makeCapturePanel() -> KeyPanel {
+        let hosting = NSHostingView(rootView: AnyView(
+            CaptureView(onCommit: { [weak self] in self?.commitCapture() })
+                .environmentObject(model)
+                .environmentObject(captureModel)))
+        let panel = makeKeyPanel(size: NSSize(width: 560, height: 120), content: hosting,
+                                 onCancel: { [weak self] in self?.dismissCapture() })
+        self.capturePanel = panel
+        self.captureHostingView = hosting
+        return panel
+    }
+
+    // MARK: Shortcut recorder (#34)
+
+    /// Show the recorder, which listens for the next key-down and re-registers
+    /// the hotkey. Already showing → just re-focus it.
+    private func beginRecordingHotKey() {
+        if let recorderPanel, recorderPanel.isVisible {
+            recorderPanel.makeKeyAndOrderFront(nil)
+            return
+        }
+        let panel = recorderPanel ?? makeRecorderPanel()
+        layout(panel, size: recorderHostingView?.fittingSize ?? NSSize(width: 300, height: 160),
+               verticalBias: 0.5)
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    /// A key-down reached the recorder: turn it into a `HotKey`. An invalid
+    /// press (a modifier on its own) leaves the recorder up to try again;
+    /// a valid one is registered and the recorder closes (#34).
+    private func applyRecordedShortcut(_ event: NSEvent) {
+        guard let key = HotKey(recording: event) else { return }
+        model.setHotKey(key)
+        endRecording()
+    }
+
+    private func endRecording() {
+        guard let recorderPanel, recorderPanel.isVisible, !recorderIsTearingDown else { return }
+        recorderIsTearingDown = true
+        recorderPanel.orderOut(nil)
+        recorderIsTearingDown = false
+    }
+
+    private func makeRecorderPanel() -> KeyPanel {
+        let hosting = NSHostingView(rootView: AnyView(
+            RecorderView(onCapture: { [weak self] event in self?.applyRecordedShortcut(event) },
+                         onCancel: { [weak self] in self?.endRecording() })))
+        let panel = makeKeyPanel(size: NSSize(width: 300, height: 160), content: hosting,
+                                 onCancel: { [weak self] in self?.endRecording() })
+        self.recorderPanel = panel
+        self.recorderHostingView = hosting
+        return panel
+    }
+
+    /// Centre `panel` on the screen holding the mouse cursor (multi-monitor),
+    /// biased vertically: 0.5 is dead centre, higher sits above centre like
+    /// Spotlight (#34).
+    private func layout(_ panel: NSPanel, size: NSSize, verticalBias: CGFloat) {
+        let mouse = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
+        let visible = screen?.visibleFrame ?? NSRect(origin: .zero, size: size)
+        let x = visible.midX - size.width / 2
+        let y = visible.minY + visible.height * verticalBias - size.height / 2
+        panel.setFrame(NSRect(x: x, y: y, width: size.width, height: size.height), display: true)
     }
 }

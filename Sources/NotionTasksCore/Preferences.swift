@@ -25,6 +25,8 @@ public protocol PreferencesStore: AnyObject {
     var viewConfig: ViewConfig? { get set }
     /// The folded priority groups (#19), as "preset|priority" keys.
     var collapsedGroups: Set<String>? { get set }
+    /// The global quick-capture shortcut (#34); `nil` applies the ⌥Space default.
+    var hotKey: HotKey? { get set }
 }
 
 /// Stores preferences in `UserDefaults`. `suite` is injectable so a check can
@@ -74,9 +76,26 @@ public final class UserDefaultsPreferences: PreferencesStore {
         }
     }
 
+    /// JSON-encoded like `viewConfig`; a corrupt or missing value degrades to
+    /// "never set", so the model applies the ⌥Space default (#34).
+    public var hotKey: HotKey? {
+        get {
+            guard let data = defaults.data(forKey: Keys.hotKey) else { return nil }
+            return try? JSONDecoder().decode(HotKey.self, from: data)
+        }
+        set {
+            if let newValue, let data = try? JSONEncoder().encode(newValue) {
+                defaults.set(data, forKey: Keys.hotKey)
+            } else {
+                defaults.removeObject(forKey: Keys.hotKey)
+            }
+        }
+    }
+
     private enum Keys {
         static let autoRefreshInterval = "autoRefreshInterval"
         static let viewConfig = "viewConfig"
         static let collapsedGroups = "collapsedGroups"
+        static let hotKey = "hotKey"
     }
 }

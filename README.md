@@ -23,6 +23,13 @@ tasks that are late or due today. Click it to drop the task panel:
     </td>
   </tr>
   <tr>
+    <td colspan="2" align="center">
+      <img src="docs/images/quick-capture.png" width="480"
+           alt="The quick-capture window: a Spotlight-style floating capsule centred on screen over the desktop, with a large task title ('Chase the signed term sheet') above a single muted line reading 'P0 · Work · Today' where each value is clickable and the due date 'Today' carries its urgency tint; the menu-bar icon above is unhighlighted, the panel closed">
+      <br><b>Quick-capture</b> — press <kbd>⌥Space</kbd> from any app to drop a Spotlight-style capsule and add a task without opening the panel; Enter files it and the window vanishes. The shortcut is configurable from the gear menu.
+    </td>
+  </tr>
+  <tr>
     <td width="50%" valign="top">
       <img src="docs/images/quick-add.png" width="100%"
            alt="The quick-add composer: a title field with Priority, Category and Due chips, and Cancel / Add buttons">

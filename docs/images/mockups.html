@@ -121,6 +121,20 @@
   .scene.light .secure { color:#4a4a4c; } .scene.dark .secure { color:#c9c9cf; }
   .btn-connect { display:inline-block; background:var(--accent); color:#fff; font-weight:600; padding:12px 26px; border-radius:9px; font-size:24px; margin:18px 0 6px; }
 
+  /* quick-capture capsule (#34): Spotlight-style, floating and centred,
+     deliberately NOT the panel chrome - a large title over a muted meta line */
+  .capsule { position:absolute; left:50%; top:150px; transform:translateX(-50%);
+             width:760px; border-radius:22px; padding:30px 34px 32px; }
+  .scene.light .capsule { background:rgba(246,245,243,.97); border:1px solid rgba(255,255,255,.6);
+                          box-shadow:0 26px 72px rgba(20,28,40,.42); }
+  .ctitle { font-size:42px; font-weight:400; letter-spacing:-.4px; }
+  .scene.light .ctitle { color:var(--l-title); }
+  .cmeta { font-size:25px; margin-top:16px; }
+  .scene.light .cmeta { color:var(--l-secondary); }
+  .cmeta b { color:var(--l-title); font-weight:400; }
+  .cmeta .today { color:var(--l-today); }
+  .cmeta .sep { opacity:.55; margin:0 4px; }
+
   /* single-scene capture: strip gallery chrome, size body to the scene */
   body.single { padding:0; }
   body.single .scene { margin:0; }
@@ -263,6 +277,25 @@
     <div class="divider"></div>
     <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Send board pack to directors</div><div class="meta"><span class="today">Today</span> · Work</div></div><div class="status">In Progress <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg></div></div>
     <div class="divider"></div>
+  </div>
+</div>
+
+<!-- ============ SCENE: quick-capture (#34) ============ -->
+<div class="scene light" data-scene="quick-capture" style="height:440px">
+  <div class="desk"></div>
+  <div class="bar">
+    <span class="appicon">
+      <svg width="30" height="24" viewBox="0 0 28 22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5l2.5 2.5L9 3"/><path d="M13 5h13"/><path d="M2 13l2.5 2.5L9 11"/><path d="M13 13h13"/></svg>
+      <span>2</span>
+    </span>
+    <svg width="30" height="22" viewBox="0 0 24 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 6a15 15 0 0 1 20 0"/><path d="M5.5 9.5a10 10 0 0 1 13 0"/><path d="M9 13a5 5 0 0 1 6 0"/><circle cx="12" cy="16.2" r="1.1" fill="currentColor" stroke="none"/></svg>
+    <svg width="38" height="20" viewBox="0 0 32 15" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="1" y="1.5" width="26" height="12" rx="3"/><rect x="3.4" y="3.9" width="17" height="7.2" rx="1.4" fill="currentColor" stroke="none"/><rect x="28.4" y="5.2" width="2.6" height="4.6" rx="1" fill="currentColor" stroke="none"/></svg>
+    <span class="clock">Sat 4 Jul&nbsp;&nbsp;12:04</span>
+  </div>
+
+  <div class="capsule">
+    <div class="ctitle">Chase the signed term sheet</div>
+    <div class="cmeta">P0 <span class="sep">·</span> <b>Work</b> <span class="sep">·</span> <span class="today">Today</span></div>
   </div>
 </div>
 

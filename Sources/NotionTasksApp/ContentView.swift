@@ -2,6 +2,10 @@ import SwiftUI
 import NotionTasksCore
 
 struct ContentView: View {
+    /// Opens the shell's quick-capture shortcut recorder (#34). The gear menu
+    /// triggers it; recording lives in the shell (AppKit), not the view.
+    var onRecordShortcut: () -> Void = {}
+
     @EnvironmentObject private var model: AppModel
     @State private var tokenField = ""
     /// The quick-add draft (#22). View state: it exists only while composing,
@@ -69,6 +73,16 @@ struct ContentView: View {
 
             if let writeError = model.writeError {
                 Text(writeError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            // A task captured via the global hotkey (#34) failed to reach Notion
+            // while the panel was shut; surface it now, on this open, with the
+            // same red-banner convention as writeError. Cleared when the panel
+            // closes, so a later open is clean unless a fresh capture has failed.
+            if let captureError = model.captureError {
+                Text(captureError)
                     .font(.caption)
                     .foregroundStyle(.red)
             }
@@ -833,43 +847,18 @@ struct ContentView: View {
     /// The due segment, tinted by urgency (#25): overdue pops red semibold,
     /// today is orange, the coming week is amber, everything else keeps the
     /// metadata line's secondary grey. The tint is confined to this text —
-    /// the dot stays the priority channel (ADR-0003).
+    /// the dot stays the priority channel (ADR-0003). Colours live in
+    /// `DueColor`, shared with the quick-capture capsule (#34).
     @ViewBuilder
     private func dueText(_ text: String, bucket: DueBucket) -> some View {
-        switch bucket {
-        case .overdue:
-            Text(text).fontWeight(.semibold).foregroundStyle(Self.overdueRed)
-        case .today:
-            Text(text).foregroundStyle(Self.todayOrange)
-        case .soon:
-            Text(text).foregroundStyle(Self.soonAmber)
-        case .later, .none:
+        if let tint = DueColor.tint(for: bucket) {
+            Text(text)
+                .fontWeight(bucket == .overdue ? .semibold : .regular)
+                .foregroundStyle(tint)
+        } else {
             Text(text)
         }
     }
-
-    /// Custom adaptive colours for the urgent buckets: the system red, orange
-    /// and yellow are all too bright to read at caption size on a light
-    /// background (yellow by inspection, orange and red by live test), so
-    /// light mode gets deeper crimson/burnt-orange/ochre and dark mode
-    /// brighter tones. The three stay a hue apart so overdue reads hottest.
-    private static let overdueRed = Color(nsColor: NSColor(name: nil) { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(red: 1.00, green: 0.45, blue: 0.38, alpha: 1)
-            : NSColor(red: 0.72, green: 0.12, blue: 0.10, alpha: 1)
-    })
-
-    private static let todayOrange = Color(nsColor: NSColor(name: nil) { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(red: 1.00, green: 0.62, blue: 0.24, alpha: 1)
-            : NSColor(red: 0.80, green: 0.35, blue: 0.02, alpha: 1)
-    })
-
-    private static let soonAmber = Color(nsColor: NSColor(name: nil) { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(red: 1.00, green: 0.75, blue: 0.28, alpha: 1)
-            : NSColor(red: 0.70, green: 0.46, blue: 0.02, alpha: 1)
-    })
 
     /// The only colour in the list: P0 red, P1 amber, P2 green (ADR-0002).
     /// A priority name beyond those three gets a neutral dot — the schema can
@@ -1046,6 +1035,15 @@ struct ContentView: View {
                             Text(option.title)
                         }
                     }
+                }
+            }
+            // The global quick-capture shortcut (#34): its current combination,
+            // a way to record a new one, and a reset to the ⌥Space default.
+            Menu("Quick-capture shortcut") {
+                Text("Current: \(model.hotKey.displayString)")
+                Button("Record new shortcut…") { onRecordShortcut() }
+                if model.hotKey != .default {
+                    Button("Reset to ⌥Space") { model.setHotKey(.default) }
                 }
             }
             Divider()

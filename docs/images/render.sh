@@ -13,6 +13,7 @@ scenes=(
   "task-list:960"
   "search:600"
   "quick-add:600"
+  "quick-capture:440"
   "custom-view:820"
   "dark-mode:960"
   "connect:454"

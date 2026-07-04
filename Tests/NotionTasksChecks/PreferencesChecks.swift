@@ -54,6 +54,18 @@ func preferencesChecks(_ t: CheckRun) async {
         defaults.removePersistentDomain(forName: suiteName)
     }
 
+    await t.test("the quick-capture hotkey round-trips (#34)") {
+        let defaults = try scratchDefaults()
+        let key = HotKey(keyCode: 49, carbonModifiers:
+            HotKey.CarbonModifier.option | HotKey.CarbonModifier.command)
+
+        UserDefaultsPreferences(defaults: defaults).hotKey = key
+
+        let reloaded = UserDefaultsPreferences(defaults: try require(UserDefaults(suiteName: suiteName)))
+        t.expectEqual(reloaded.hotKey, key)
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
     await t.test("an empty store yields nil, not a phantom configuration") {
         let defaults = try scratchDefaults()
         let prefs = UserDefaultsPreferences(defaults: defaults)
@@ -61,6 +73,7 @@ func preferencesChecks(_ t: CheckRun) async {
         t.expect(prefs.viewConfig == nil, "nothing was ever saved")
         t.expect(prefs.autoRefreshInterval == nil, "nothing was ever saved")
         t.expect(prefs.collapsedGroups == nil, "nothing was ever saved")
+        t.expect(prefs.hotKey == nil, "nothing was ever saved")
         defaults.removePersistentDomain(forName: suiteName)
     }
 }

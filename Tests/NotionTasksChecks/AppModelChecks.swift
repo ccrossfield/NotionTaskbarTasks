@@ -63,9 +63,24 @@ final class InMemoryPreferences: PreferencesStore {
     var autoRefreshInterval: TimeInterval?
     var viewConfig: ViewConfig?
     var collapsedGroups: Set<String>?
+    var hotKey: HotKey?
     init(autoRefreshInterval: TimeInterval? = nil) {
         self.autoRefreshInterval = autoRefreshInterval
     }
+}
+
+/// The hotkey seam's test double (#34). The app uses `CarbonHotKeyService`;
+/// this records the last combination registered (and whether it's currently
+/// registered) so a check can assert the model drove it.
+final class FakeHotKeyService: HotKeyService {
+    private(set) var registered: HotKey?
+    private(set) var registerCount = 0
+    init() {}
+    func register(_ hotKey: HotKey) {
+        registered = hotKey
+        registerCount += 1
+    }
+    func unregister() { registered = nil }
 }
 
 /// The login-item seam's test double. The app uses `SMAppService` behind
@@ -1994,5 +2009,185 @@ func appModelChecks(_ t: CheckRun) async {
 
         t.expect(cache.saved.last?.tasks.first { $0.id == firstTaskID }?.dueDate == newDue,
                  "the new due date must be cached, or a relaunch loses it")
+    }
+
+    t.suite("AppModel quick-capture hotkey (#34)")
+
+    func hotKeyModel(preferences: InMemoryPreferences? = nil,
+                     service: FakeHotKeyService? = nil) -> AppModel {
+        let stub = StubHTTPClient(responseData: Data(), statusCode: 200)
+        return AppModel(tokenStore: InMemoryTokenStore(seed: "ntn_saved"),
+                        preferences: preferences, hotKeyService: service) {
+            NotionClient(dataSourceID: ds, token: $0, http: stub)
+        }
+    }
+
+    await t.test("the hotkey defaults to ⌥Space when none is stored") {
+        t.expectEqual(hotKeyModel(preferences: InMemoryPreferences()).hotKey, .default)
+    }
+
+    await t.test("a stored hotkey is restored on launch, before any registration") {
+        let prefs = InMemoryPreferences()
+        prefs.hotKey = HotKey(keyCode: 40, carbonModifiers:
+            HotKey.CarbonModifier.command | HotKey.CarbonModifier.control)
+        t.expectEqual(hotKeyModel(preferences: prefs).hotKey, prefs.hotKey)
+    }
+
+    await t.test("setHotKey persists the new shortcut and re-registers it") {
+        let prefs = InMemoryPreferences()
+        let service = FakeHotKeyService()
+        let model = hotKeyModel(preferences: prefs, service: service)
+        let newKey = HotKey(keyCode: 40, carbonModifiers:
+            HotKey.CarbonModifier.command | HotKey.CarbonModifier.control)
+
+        model.setHotKey(newKey)
+
+        t.expectEqual(model.hotKey, newKey)
+        t.expectEqual(prefs.hotKey, newKey) // persisted for the next launch
+        t.expectEqual(service.registered, newKey) // re-registered live
+    }
+
+    await t.test("setHotKey ignores a modifier-only combination - a bad shortcut is never persisted") {
+        let prefs = InMemoryPreferences()
+        let service = FakeHotKeyService()
+        let model = hotKeyModel(preferences: prefs, service: service)
+        let invalid = HotKey(keyCode: 58, carbonModifiers: HotKey.CarbonModifier.option) // Option alone
+
+        model.setHotKey(invalid)
+
+        t.expectEqual(model.hotKey, .default) // unchanged
+        t.expect(prefs.hotKey == nil, "an invalid shortcut must not be persisted")
+        t.expect(service.registered == nil, "an invalid shortcut must not be registered")
+    }
+
+    await t.test("registerHotKey registers the current shortcut with the service") {
+        let service = FakeHotKeyService()
+        let model = hotKeyModel(service: service)
+
+        model.registerHotKey()
+
+        t.expectEqual(service.registered, .default)
+    }
+
+    t.suite("AppModel quick-capture create (#34)")
+
+    await t.test("capturing a task creates it, shows the new row, and leaves the composer untouched") {
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        stub.create = createdPageJSON(id: "cap-1", title: "Call the plumber",
+                                      category: "👨🏻‍💻 Work", priority: "P1")
+        let cache = InMemoryTaskCache()
+        let model = await loadedModel(stub: stub, cache: cache)
+
+        await model.captureTask(
+            TaskDraft(title: "Call the plumber", priority: "P1", category: "👨🏻‍💻 Work"))
+
+        guard case .loaded(let tasks) = model.state else {
+            t.expect(false, "expected .loaded, got \(model.state)"); return
+        }
+        t.expect(tasks.contains { $0.id == "cap-1" }, "the captured task should appear in the loaded list")
+        t.expect(!model.isComposing, "capture must never open the composer")
+        t.expect(model.createError == nil, "capture failures surface via captureError, not the composer's")
+        t.expect(model.captureError == nil, "a successful capture leaves no error")
+        t.expect(cache.saved.last?.tasks.contains { $0.id == "cap-1" } == true,
+                 "the captured task must be cached, or a relaunch loses it")
+    }
+
+    await t.test("a failed capture stashes an error for the panel and adds no phantom row") {
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        stub.createStatusCode = 500
+        let model = await loadedModel(stub: stub)
+        guard case .loaded(let before) = model.state else {
+            t.expect(false, "expected .loaded, got \(model.state)"); return
+        }
+
+        await model.captureTask(TaskDraft(title: "Doomed capture"))
+
+        t.expect(model.captureError != nil, "a failed capture must stash a reason for the next panel open")
+        t.expect(model.createError == nil, "the composer's error must stay clear - capture doesn't use it")
+        t.expect(!model.isComposing, "capture never opens the composer")
+        guard case .loaded(let after) = model.state else {
+            t.expect(false, "expected .loaded, got \(model.state)"); return
+        }
+        t.expectEqual(after.map(\.id), before.map(\.id)) // nothing was added
+    }
+
+    await t.test("a capture failure survives a background refresh so it reaches the next panel open") {
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        stub.createStatusCode = 500
+        let model = await loadedModel(stub: stub)
+        await model.captureTask(TaskDraft(title: "Doomed"))
+        t.expect(model.captureError != nil, "precondition: the capture failed")
+
+        // Unlike writeError, a poll refresh must NOT clear this - the panel may
+        // be shut for minutes, and the whole point is to surface it on next open.
+        await model.refresh()
+
+        t.expect(model.captureError != nil,
+                 "a poll refresh must not swallow the capture failure before it is seen")
+    }
+
+    await t.test("the panel clears a shown capture failure on close") {
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        stub.createStatusCode = 500
+        let model = await loadedModel(stub: stub)
+        await model.captureTask(TaskDraft(title: "Doomed"))
+        t.expect(model.captureError != nil, "precondition: the capture failed")
+
+        model.clearCaptureError()
+
+        t.expect(model.captureError == nil, "closing the panel clears the error it just showed")
+    }
+
+    await t.test("a 401 while capturing drops the token and routes to reconnect, not a banner") {
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        let model = AppModel(tokenStore: store) {
+            NotionClient(dataSourceID: ds, token: $0, http: stub, sleep: { _ in })
+        }
+        await model.start()
+        stub.createStatusCode = 401
+
+        await model.captureTask(TaskDraft(title: "Rejected"))
+
+        t.expect(store.read() == nil, "a rejected token must be cleared")
+        if case .failed = model.state {} else {
+            t.expect(false, "a dead token must route to reconnect, got \(model.state)")
+        }
+    }
+
+    await t.test("a rate-limited capture names the throttle") {
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        stub.createStatusCode = 429
+        let model = await loadedModel(stub: stub)
+
+        await model.captureTask(TaskDraft(title: "Throttled"))
+
+        t.expect(model.captureError?.localizedCaseInsensitiveContains("rate") == true,
+                 "throttling must be named, was \(model.captureError ?? "nil")")
+    }
+
+    await t.test("capturing a blank title sends nothing") {
+        let stub = RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+        let model = await loadedModel(stub: stub)
+
+        await model.captureTask(TaskDraft(title: "   \n"))
+
+        t.expect(!stub.requests.contains {
+            $0.httpMethod == "POST" && $0.url?.absoluteString.hasSuffix("/pages") == true
+        }, "a blank capture is not worth a write")
     }
 }

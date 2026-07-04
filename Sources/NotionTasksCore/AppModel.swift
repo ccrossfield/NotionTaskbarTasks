@@ -90,11 +90,23 @@ public final class AppModel: ObservableObject {
     /// preset switch, though, so widening a fruitless search to All open is one
     /// tap rather than a retype.
     @Published public private(set) var searchText = ""
+    /// The global quick-capture shortcut (#34). Restored from preferences at
+    /// launch (defaulting to ⌥Space) and changed via `setHotKey`; the gear menu
+    /// reads it and the shell registers it.
+    @Published public private(set) var hotKey: HotKey
+    /// Set when a task created from the quick-capture window (#34) failed to
+    /// reach Notion. The window has already closed optimistically, so unlike
+    /// the composer's `createError` this waits to be shown on the main panel's
+    /// next open. Deliberately NOT cleared by a background refresh (the panel
+    /// may be shut for minutes) - only by `clearCaptureError` when the panel
+    /// closes, or by the next capture attempt.
+    @Published public private(set) var captureError: String?
 
     private let tokenStore: TokenStore
     private let cache: TaskCache?
     private let preferences: PreferencesStore?
     private let loginItem: LoginItemService?
+    private let hotKeyService: HotKeyService?
     private let makeClient: (String) -> NotionClient
     /// Injectable clock, so checks can pin the snapshot's `fetchedAt`.
     private let now: () -> Date
@@ -128,6 +140,7 @@ public final class AppModel: ObservableObject {
                 cache: TaskCache? = nil,
                 preferences: PreferencesStore? = nil,
                 loginItem: LoginItemService? = nil,
+                hotKeyService: HotKeyService? = nil,
                 now: @escaping () -> Date = Date.init,
                 pollSleep: @escaping @Sendable (TimeInterval) async -> Void = { seconds in
                     try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
@@ -137,12 +150,15 @@ public final class AppModel: ObservableObject {
         self.cache = cache
         self.preferences = preferences
         self.loginItem = loginItem
+        self.hotKeyService = hotKeyService
         self.now = now
         self.pollSleep = pollSleep
         self.makeClient = makeClient
         self.launchAtLogin = loginItem?.isEnabled ?? false
         self.autoRefreshInterval =
             preferences?.autoRefreshInterval ?? Self.defaultAutoRefreshInterval
+        // Restore the quick-capture shortcut, or fall back to ⌥Space (#34).
+        self.hotKey = preferences?.hotKey ?? .default
         // Reopen the way the app was left (#9) — restored here, before any
         // fetch, so the first render is already the remembered view.
         if let config = preferences?.viewConfig {
@@ -488,6 +504,55 @@ public final class AppModel: ObservableObject {
         }
     }
 
+    /// Create a task from the global quick-capture window (#34). Optimistic,
+    /// unlike the composer's pessimistic `createTask`: the window has already
+    /// closed by the time this runs, so there is no composer state to drive
+    /// (`isCreating`/`isComposing`) and no inline error to show. It reuses the
+    /// same `NotionClient` create path - no duplicate write logic - and, on
+    /// success, threads the new row into the loaded list exactly as `createTask`
+    /// does so an open (or soon-to-open) panel shows it at once.
+    ///
+    /// A failure is stashed in `captureError` to surface on the panel's next
+    /// open; a 401 drops the token and routes to reconnect like every write
+    /// path (#13). No "not visible in this view" notice: that reassures someone
+    /// watching the composer, and here there's no composer and no one watching.
+    public func captureTask(_ draft: TaskDraft) async {
+        guard let token = tokenStore.read(), !token.isEmpty else { return }
+        var draft = draft
+        draft.title = draft.trimmedTitle
+        guard !draft.title.isEmpty else { return }
+        captureError = nil
+        do {
+            let created = try await makeClient(token)
+                .createTask(draft, titleProperty: titleProperty)
+            // Re-read state after the await (issue #12). If a list is on screen,
+            // show the new row and keep the cache in step; if nothing is loaded
+            // (offline launch, say), the task is safely in Notion regardless and
+            // the next fetch surfaces it.
+            guard case .loaded(let current) = state else { return }
+            let updated = current + [created]
+            state = .loaded(updated)
+            cache?.save(CachedSnapshot(
+                tasks: updated, openStatuses: openStatuses, workCategory: workCategory,
+                personalCategories: personalCategories, schemaOptions: schemaOptions,
+                fetchedAt: lastRefreshed ?? now()))
+        } catch NotionClientError.unauthorized {
+            // A dead token can't be retried into working; drop it and route to
+            // reconnect (#13). The panel's next open shows the token screen, not
+            // a banner - there's nothing to capture into until it's reconnected.
+            try? tokenStore.delete()
+            state = .failed("Notion rejected the stored token, so that task wasn't created. Enter a new token to reconnect.")
+        } catch NotionClientError.rateLimited {
+            captureError = "A task you captured wasn't saved - Notion was rate-limiting the app. Try adding it again."
+        } catch {
+            captureError = "A task you captured wasn't saved to Notion. Try adding it again."
+        }
+    }
+
+    /// The main panel clears a shown capture failure when it closes (#34), so a
+    /// later open starts clean unless a fresh capture has failed since.
+    public func clearCaptureError() { captureError = nil }
+
     /// Re-fetch with the token already stored.
     public func refresh() async {
         writeError = nil
@@ -549,6 +614,26 @@ public final class AppModel: ObservableObject {
         } catch {
             launchAtLogin = loginItem.isEnabled
         }
+    }
+
+    /// Register the current quick-capture shortcut with the service (#34). Call
+    /// once at launch, after the shell has wired the service's fire action -
+    /// the mirror of `startPolling`, kept separate from `init` so the shell
+    /// controls the moment registration (and its side effects) happens.
+    public func registerHotKey() {
+        hotKeyService?.register(hotKey)
+    }
+
+    /// Change the global quick-capture shortcut (#34): validate, persist, and
+    /// re-register (the service drops the old registration first). Mirrors
+    /// `setAutoRefreshInterval`. An invalid combination is ignored - the
+    /// recorder shouldn't offer one, and a modifier-only value must never be
+    /// persisted or registered.
+    public func setHotKey(_ hotKey: HotKey) {
+        guard hotKey.isValid else { return }
+        self.hotKey = hotKey
+        preferences?.hotKey = hotKey
+        hotKeyService?.register(hotKey)
     }
 
     /// Forget the stored token and return to the entry field. The cached tasks
