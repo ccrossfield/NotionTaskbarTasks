@@ -14,6 +14,7 @@ scenes=(
   "search:600"
   "quick-add:600"
   "quick-capture:440"
+  "claude-code:560"
   "custom-view:820"
   "dark-mode:960"
   "connect:454"

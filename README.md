@@ -30,6 +30,13 @@ tasks that are late or due today. Click it to drop the task panel:
     </td>
   </tr>
   <tr>
+    <td colspan="2" align="center">
+      <img src="docs/images/claude-code.png" width="520"
+           alt="A hovered task row 'Review lender term sheet' in the panel, highlighted and revealing a blue terminal icon and a bare three-dot menu on its right, while the other rows show no trailing controls; to the right an iTerm2 window has opened in ~/Documents/workspace running 'claude' seeded with the prompt 'Help with: Review lender term sheet (notion.so/…)' above a 'Starting Claude Code…' line">
+      <br><b>Work in Claude Code</b> — hover a task and click the terminal icon (or pick <b>Work on in Claude Code</b> from the ⋯ menu) to open iTerm2 in your workspace with <code>claude</code> already seeded with the task; the task is marked <b>In&nbsp;Progress</b> as you start. The workspace folder is configurable from the gear menu.
+    </td>
+  </tr>
+  <tr>
     <td width="50%" valign="top">
       <img src="docs/images/quick-add.png" width="100%"
            alt="The quick-add composer: a title field with Priority, Category and Due chips, and Cancel / Add buttons">

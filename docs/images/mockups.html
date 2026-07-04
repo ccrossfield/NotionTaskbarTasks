@@ -138,6 +138,30 @@
   /* single-scene capture: strip gallery chrome, size body to the scene */
   body.single { padding:0; }
   body.single .scene { margin:0; }
+
+  /* claude-code launch: at rest a row shows no trailing controls; hover reveals
+     a terminal icon + a bare ellipsis (no circle). Clicking either sets the task
+     In Progress and opens an iTerm2 window that runs `claude` seeded with the task. */
+  .row.hov { background:rgba(10,132,255,.07); border-radius:12px; margin-left:-12px; margin-right:-12px; padding-left:12px; padding-right:12px; }
+  .rtrail { flex:0 0 auto; display:flex; align-items:center; gap:16px; margin-top:3px; }
+  .rtrail .term { color:var(--accent); }
+  .rtrail .ell { color:var(--l-secondary); }
+  /* iTerm2 window sitting on the desktop */
+  .term-win { position:absolute; border-radius:13px; overflow:hidden; z-index:4;
+              box-shadow:0 22px 60px rgba(10,16,28,.5); }
+  .term-win .tbar { height:42px; background:#e7e7ea; display:flex; align-items:center; gap:10px; padding:0 16px; }
+  .term-win .tl { width:15px; height:15px; border-radius:50%; }
+  .term-win .tl.r { background:#ff5f57; } .term-win .tl.y { background:#febc2e; } .term-win .tl.g { background:#28c840; }
+  .term-win .ttitle { flex:1; text-align:center; font-size:18px; color:#5c5c62; margin-right:45px; }
+  .term-win .tbody { background:#1d1d20; padding:22px 22px 28px;
+                     font-family:"SF Mono",ui-monospace,Menlo,Monaco,monospace; font-size:19.5px; line-height:1.55; color:#d4d4d8; }
+  .term-win .tbody .pmt { color:#4ec9b0; }
+  .term-win .tbody .pth { color:#569cd6; }
+  .term-win .tbody .str { color:#ce9178; }
+  .term-win .tbody .dim { color:#7f7f86; }
+  .term-win .tbody .cur { display:inline-block; width:11px; height:21px; background:#d4d4d8; vertical-align:-4px; margin-left:2px; }
+  .term-win .tbody .ln { display:block; }
+  .term-win .tbody .gap { height:14px; }
 </style>
 </head>
 <body class="gallery">
@@ -419,6 +443,59 @@
     <div class="connect-text">Paste a Notion internal integration token to connect. It's stored in your Keychain.</div>
     <div class="field" style="margin:8px 0 4px"><span class="secure grow">••••••••••••••••••••</span></div>
     <span class="btn-connect">Connect</span>
+  </div>
+</div>
+
+<!-- ============ SCENE: claude-code (launch a task in Claude Code) ============ -->
+<div class="scene light" data-scene="claude-code" style="height:560px">
+  <div class="desk"></div>
+  <div class="bar">
+    <span class="appicon sel">
+      <svg width="30" height="24" viewBox="0 0 28 22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5l2.5 2.5L9 3"/><path d="M13 5h13"/><path d="M2 13l2.5 2.5L9 11"/><path d="M13 13h13"/></svg>
+      <span>2</span>
+    </span>
+    <svg width="30" height="22" viewBox="0 0 24 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 6a15 15 0 0 1 20 0"/><path d="M5.5 9.5a10 10 0 0 1 13 0"/><path d="M9 13a5 5 0 0 1 6 0"/><circle cx="12" cy="16.2" r="1.1" fill="currentColor" stroke="none"/></svg>
+    <svg width="38" height="20" viewBox="0 0 32 15" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="1" y="1.5" width="26" height="12" rx="3"/><rect x="3.4" y="3.9" width="17" height="7.2" rx="1.4" fill="currentColor" stroke="none"/><rect x="28.4" y="5.2" width="2.6" height="4.6" rx="1" fill="currentColor" stroke="none"/></svg>
+    <span class="clock">Sat 4 Jul&nbsp;&nbsp;12:04</span>
+  </div>
+
+  <div class="panel" style="left:28px; width:516px">
+    <div class="phead">
+      <span class="ptitle">Pivotal Priorities</span>
+      <svg class="tchev" width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>
+      <span class="spacer"></span>
+      <span class="hicons">
+        <svg width="30" height="30" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
+        <svg width="27" height="27" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="7" cy="7" r="4.3"/><path d="M10.2 10.2l3.4 3.4"/></svg>
+        <svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.7-3.98"/><path d="M13.6 3.1v3.1h-3.1"/></svg>
+        <svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"><circle cx="12" cy="12" r="2.7"/><path d="M19.4 13a7.8 7.8 0 000-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 00-1.7-1L15 2.5h-4l-.3 2.4a7.6 7.6 0 00-1.7 1l-2.5-1-2 3.5L6.6 11a7.8 7.8 0 000 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1l.3 2.4h4l.3-2.4c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5z"/></svg>
+      </span>
+    </div>
+
+    <div class="ghead"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg><span class="dot" style="background:var(--p1)"></span>P1 <span class="count">(3)</span></div>
+
+    <div class="row hov">
+      <span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span>
+      <div class="rmain"><div class="rtitle">Review lender term sheet</div><div class="meta"><span class="soon">Tomorrow</span> · Work</div></div>
+      <div class="rtrail">
+        <span class="term"><svg width="34" height="34" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"><rect x="1.3" y="2.7" width="13.4" height="10.6" rx="2.4"/><path d="M4.2 6 6.6 8 4.2 10"/><path d="M7.6 10.2H11"/></svg></span>
+        <span class="ell"><svg width="30" height="30" viewBox="0 0 16 16" fill="currentColor"><circle cx="3" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="13" cy="8" r="1.5"/></svg></span>
+      </div>
+    </div>
+    <div class="divider"></div>
+    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Prep Monday leadership sync</div><div class="meta"><span class="soon">Thu</span> · Work</div></div></div>
+    <div class="divider"></div>
+    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Update group cashflow model</div><div class="meta">11 Jul · Work</div></div></div>
+    <div class="divider"></div>
+  </div>
+
+  <div class="term-win" style="left:552px; top:150px; width:344px">
+    <div class="tbar"><span class="tl r"></span><span class="tl y"></span><span class="tl g"></span><span class="ttitle">workspace — claude</span></div>
+    <div class="tbody">
+      <div class="ln"><span class="pmt">charlie@mac</span> <span class="pth">~</span> % cd ~/Documents/workspace &amp;&amp; claude <span class="str">"Help with: Review lender term sheet (notion.so/2f1a8c…)"</span></div>
+      <div class="gap"></div>
+      <div class="ln dim">Starting Claude Code…<span class="cur"></span></div>
+    </div>
   </div>
 </div>
 
