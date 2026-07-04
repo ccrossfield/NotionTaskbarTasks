@@ -28,6 +28,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
+  <key>NSAppleEventsUsageDescription</key><string>Notion Tasks opens iTerm2 to start working on a task in Claude Code.</string>
 </dict>
 </plist>
 PLIST

@@ -112,6 +112,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// The single most-recent discarded capture title (#34), restored on the
     /// next open. In-memory only, per the issue — never persisted to disk.
     private var lastDiscardedTitle: String?
+    /// The full draft of the most-recent *failed* capture (#37): title plus the
+    /// chip selections, so a transient failure loses nothing and the next open
+    /// restores it for a one-tap retry. In-memory only, like `lastDiscardedTitle`.
+    private var lastFailedDraft: TaskDraft?
     private var captureIsTearingDown = false
     // The shortcut recorder (#34), shown only while recording a new combination.
     private var recorderPanel: KeyPanel?
@@ -270,7 +274,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// field's draft) and spares a hosting-view rebuild per click.
     private func makePanel() -> TaskPanel {
         let hosting = PanelHostingView(rootView: AnyView(
-            ContentView(onRecordShortcut: { [weak self] in self?.beginRecordingHotKey() })
+            ContentView(
+                onRecordShortcut: { [weak self] in self?.beginRecordingHotKey() },
+                onWorkInClaudeCode: { [weak self] task in self?.workInClaudeCode(on: task) },
+                onChooseWorkspace: { [weak self] in self?.chooseClaudeWorkspace() })
                 .environmentObject(model)))
         hosting.translatesAutoresizingMaskIntoConstraints = false
         hosting.onSizeChange = { [weak self] in
@@ -393,11 +400,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             captureModel.focusToken += 1
             return
         }
-        // Seed the view-aware defaults for the persisted preset (#22), then
-        // restore the last discarded title over the top — chip selections are
-        // not remembered, only the title text (#34).
-        var draft = model.composerDraft()
-        draft.title = lastDiscardedTitle ?? ""
+        // Restore the full draft from a failed capture (#37) if there is one, so
+        // a transient failure loses nothing; otherwise seed the view-aware
+        // defaults and restore just the last discarded title over the top -
+        // chip selections aren't remembered on a plain dismiss, only the title (#34).
+        var draft: TaskDraft
+        if let failed = lastFailedDraft {
+            draft = failed
+            lastFailedDraft = nil
+        } else {
+            draft = model.composerDraft()
+            draft.title = lastDiscardedTitle ?? ""
+        }
         captureModel.draft = draft
         captureModel.focusToken += 1
         let panel = capturePanel ?? makeCapturePanel()
@@ -413,10 +427,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let draft = captureModel.draft
         guard !draft.trimmedTitle.isEmpty else { return }
         lastDiscardedTitle = nil
+        lastFailedDraft = nil
         captureIsTearingDown = true
         capturePanel.orderOut(nil)
         captureIsTearingDown = false
-        Task { await model.captureTask(draft) }
+        // Optimistic capture (#37): the provisional row already shows in the
+        // menu; reconcile in the background. On a transient failure keep the
+        // full draft so the next capture-window open restores it for a retry.
+        Task { [weak self] in
+            let outcome = await self?.model.captureTask(draft)
+            if outcome == .transientFailure { self?.lastFailedDraft = draft }
+        }
     }
 
     /// Esc or a click away: close the capture window, remembering a typed-but-
@@ -511,6 +532,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         self.recorderPanel = panel
         self.recorderHostingView = hosting
         return panel
+    }
+
+    // MARK: Work on a task in Claude Code (#35)
+
+    /// iTerm2's bundle id, for the installed-check.
+    private static let iTermBundleID = "com.googlecode.iterm2"
+
+    /// Launch iTerm2 in the workspace directory and run `claude` seeded with the
+    /// task (#35), flipping the task to In Progress as work starts. iTerm2-only:
+    /// if it isn't installed, alert rather than fail silently. The `cd`/`claude`
+    /// failures surface in the terminal itself, so there's no app-side handling
+    /// for those.
+    private func workInClaudeCode(on task: NotionTask) {
+        guard NSWorkspace.shared.urlForApplication(withBundleIdentifier: Self.iTermBundleID) != nil else {
+            presentITermMissingAlert()
+            return
+        }
+        Task { await model.beginWorking(taskID: task.id) }
+        let seed = ClaudeCodeLaunch.seed(title: task.title, url: task.url)
+        let command = ClaudeCodeLaunch.shellCommand(
+            workspaceDirectory: model.claudeWorkspaceDirectory, seed: seed)
+        runAppleScript(ClaudeCodeLaunch.iTermScript(command: command))
+    }
+
+    /// Run an AppleScript source string (#35). First use triggers the macOS
+    /// "NotionTasks wants to control iTerm2" automation prompt (the plist carries
+    /// NSAppleEventsUsageDescription); a denial or error is logged, not fatal.
+    private func runAppleScript(_ source: String) {
+        guard let script = NSAppleScript(source: source) else { return }
+        var error: NSDictionary?
+        script.executeAndReturnError(&error)
+        if let error { NSLog("Claude Code launch failed: \(error)") }
+    }
+
+    private func presentITermMissingAlert() {
+        let alert = NSAlert()
+        alert.messageText = "iTerm2 isn’t installed"
+        alert.informativeText = "“Work on in Claude Code” opens the task in iTerm2. Install iTerm2 from iterm2.com, then try again."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+    }
+
+    /// Present a folder chooser for the Claude workspace directory (#35), seeded
+    /// to the current directory. A chosen folder is persisted via the model.
+    private func chooseClaudeWorkspace() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose"
+        panel.message = "Choose the folder “Work on in Claude Code” launches into."
+        panel.directoryURL = URL(fileURLWithPath:
+            (model.claudeWorkspaceDirectory as NSString).expandingTildeInPath)
+        NSApp.activate(ignoringOtherApps: true)
+        if panel.runModal() == .OK, let url = panel.url {
+            model.setClaudeWorkspaceDirectory(url.path)
+        }
     }
 
     /// Centre `panel` on the screen holding the mouse cursor (multi-monitor),

@@ -66,6 +66,16 @@ func preferencesChecks(_ t: CheckRun) async {
         defaults.removePersistentDomain(forName: suiteName)
     }
 
+    await t.test("the Claude workspace directory round-trips (#35)") {
+        let defaults = try scratchDefaults()
+
+        UserDefaultsPreferences(defaults: defaults).claudeWorkspaceDirectory = "/Users/tester/code"
+
+        let reloaded = UserDefaultsPreferences(defaults: try require(UserDefaults(suiteName: suiteName)))
+        t.expectEqual(reloaded.claudeWorkspaceDirectory, "/Users/tester/code")
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
     await t.test("an empty store yields nil, not a phantom configuration") {
         let defaults = try scratchDefaults()
         let prefs = UserDefaultsPreferences(defaults: defaults)
@@ -74,6 +84,7 @@ func preferencesChecks(_ t: CheckRun) async {
         t.expect(prefs.autoRefreshInterval == nil, "nothing was ever saved")
         t.expect(prefs.collapsedGroups == nil, "nothing was ever saved")
         t.expect(prefs.hotKey == nil, "nothing was ever saved")
+        t.expect(prefs.claudeWorkspaceDirectory == nil, "nothing was ever saved")
         defaults.removePersistentDomain(forName: suiteName)
     }
 }

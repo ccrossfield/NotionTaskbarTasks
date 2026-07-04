@@ -115,6 +115,12 @@ public struct NotionTask: Identifiable, Equatable, Codable {
             url: url)
     }
 
+    /// A locally-inserted quick-capture row awaiting its Notion create (#37).
+    /// Its `id` is a `temp-<UUID>` placeholder, not a real Notion page id, so
+    /// writes must never target it and it must never be cached. Notion page ids
+    /// are bare UUIDs, so the `temp-` prefix can't collide with a real one.
+    public var isProvisional: Bool { id.hasPrefix("temp-") }
+
     /// The task's page URL as a value the view can hand to `NSWorkspace` (#21).
     /// `nil` when the page URL is absent or malformed.
     public var webURL: URL? {

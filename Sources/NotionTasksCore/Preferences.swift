@@ -27,6 +27,9 @@ public protocol PreferencesStore: AnyObject {
     var collapsedGroups: Set<String>? { get set }
     /// The global quick-capture shortcut (#34); `nil` applies the ⌥Space default.
     var hotKey: HotKey? { get set }
+    /// The Claude Code workspace directory (#35); `nil` applies the
+    /// ~/Documents/workspace default.
+    var claudeWorkspaceDirectory: String? { get set }
 }
 
 /// Stores preferences in `UserDefaults`. `suite` is injectable so a check can
@@ -92,10 +95,24 @@ public final class UserDefaultsPreferences: PreferencesStore {
         }
     }
 
+    /// A plain string; a missing value degrades to "never set", so the model
+    /// applies the ~/Documents/workspace default (#35).
+    public var claudeWorkspaceDirectory: String? {
+        get { defaults.string(forKey: Keys.claudeWorkspaceDirectory) }
+        set {
+            if let newValue {
+                defaults.set(newValue, forKey: Keys.claudeWorkspaceDirectory)
+            } else {
+                defaults.removeObject(forKey: Keys.claudeWorkspaceDirectory)
+            }
+        }
+    }
+
     private enum Keys {
         static let autoRefreshInterval = "autoRefreshInterval"
         static let viewConfig = "viewConfig"
         static let collapsedGroups = "collapsedGroups"
         static let hotKey = "hotKey"
+        static let claudeWorkspaceDirectory = "claudeWorkspaceDirectory"
     }
 }

@@ -9,6 +9,20 @@ public enum TaskListState: Equatable {
     case failed(String)
 }
 
+/// How a quick-capture create resolved (#37), so the shell knows whether to
+/// preserve the typed draft for a retry.
+public enum CaptureOutcome: Equatable {
+    /// Created (optimistically shown, then reconciled to the real task).
+    case captured
+    /// Nothing was sent - no token, or a blank title.
+    case notCaptured
+    /// A network / rate-limit / server failure: the provisional row was rolled
+    /// back and the full draft should be preserved for retry.
+    case transientFailure
+    /// The token was rejected: dropped, routed to reconnect (#13).
+    case authFailure
+}
+
 /// Drives the panel: reads the stored token, fetches tasks, and maps outcomes
 /// to `TaskListState`. This is where "prompt on first run, reuse a stored
 /// token, clear a rejected token" lives — the SwiftUI views just render `state`.
@@ -101,6 +115,23 @@ public final class AppModel: ObservableObject {
     /// may be shut for minutes) - only by `clearCaptureError` when the panel
     /// closes, or by the next capture attempt.
     @Published public private(set) var captureError: String?
+    /// Tasks currently ticked-and-dwelling after a one-click complete (#36):
+    /// the green tick shows for `completionDwell` before the row collapses out.
+    /// Lives on the model, not view `@State`, because this is a menu-bar popover
+    /// that can close and reopen mid-dwell - the model survives that, view state
+    /// wouldn't. While a task is in here its real status is left untouched (the
+    /// write is pessimistic), so it stays visible in `groups()` on its own open
+    /// status; the tick is driven purely by membership here.
+    @Published public private(set) var pendingCompletion: Set<String> = []
+    /// Tasks that just bounced back into the list after a failed completion
+    /// write (#36): the row is restored at its original position and the view
+    /// flashes a brief highlight so the eye catches which one returned. Cleared
+    /// after `restoreFlash`.
+    @Published public private(set) var restoredCompletions: Set<String> = []
+    /// The directory a "Work on in Claude Code" launch cd's into before running
+    /// `claude` (#35). Restored from preferences at launch (defaulting to
+    /// ~/Documents/workspace) and changed via `setClaudeWorkspaceDirectory`.
+    @Published public private(set) var claudeWorkspaceDirectory: String
 
     private let tokenStore: TokenStore
     private let cache: TaskCache?
@@ -115,6 +146,15 @@ public final class AppModel: ObservableObject {
     /// default is a plain `Task.sleep`.
     private let pollSleep: @Sendable (TimeInterval) async -> Void
     private var pollTask: Task<Void, Never>?
+    /// The UI-timing seam (#36): waits out the completion tick's dwell and the
+    /// failure-flash. Injected so checks drive "the dwell elapses" without real
+    /// waiting and can observe the ticked row mid-dwell; the app default sleeps.
+    private let uiSleep: @Sendable (TimeInterval) async -> Void
+    /// How many quick-captures are mid-flight (#37): a counter, not a flag, so
+    /// concurrent captures each guard the poll independently. A poll tick is
+    /// skipped while any capture is in flight, so a mid-capture refresh can't
+    /// drop the provisional row before its create returns.
+    private var capturesInFlight = 0
 
     /// Schema-derived facts for the preset filters (ADR-0001). The compile-time
     /// fallbacks are initial values only: they are overwritten by a cached
@@ -145,6 +185,9 @@ public final class AppModel: ObservableObject {
                 pollSleep: @escaping @Sendable (TimeInterval) async -> Void = { seconds in
                     try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
                 },
+                uiSleep: @escaping @Sendable (TimeInterval) async -> Void = { seconds in
+                    try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                },
                 makeClient: @escaping (String) -> NotionClient) {
         self.tokenStore = tokenStore
         self.cache = cache
@@ -153,8 +196,13 @@ public final class AppModel: ObservableObject {
         self.hotKeyService = hotKeyService
         self.now = now
         self.pollSleep = pollSleep
+        self.uiSleep = uiSleep
         self.makeClient = makeClient
         self.launchAtLogin = loginItem?.isEnabled ?? false
+        // The Claude Code workspace directory (#35), or the ~/Documents/workspace
+        // default until the user picks another.
+        self.claudeWorkspaceDirectory =
+            preferences?.claudeWorkspaceDirectory ?? Self.defaultWorkspaceDirectory
         self.autoRefreshInterval =
             preferences?.autoRefreshInterval ?? Self.defaultAutoRefreshInterval
         // Restore the quick-capture shortcut, or fall back to ⌥Space (#34).
@@ -173,6 +221,15 @@ public final class AppModel: ObservableObject {
     /// One minute: fresh enough for the menu-bar badge, and 1-2 requests a
     /// minute is far inside Notion's ~3 req/s budget.
     public static let defaultAutoRefreshInterval: TimeInterval = 60
+
+    /// How long a completed row dwells ticked before it collapses out (#36):
+    /// long enough to register the tick, short enough to feel instant.
+    static let completionDwell: TimeInterval = 0.7
+    /// How long a bounced-back row stays highlighted after a failed completion
+    /// (#36).
+    static let restoreFlash: TimeInterval = 1.5
+    /// Where "Work on in Claude Code" launches by default (#35).
+    public static let defaultWorkspaceDirectory = "~/Documents/workspace"
 
     /// Call on launch. Loads tasks if a token is stored, else prompts for one.
     public func start() async {
@@ -196,38 +253,133 @@ public final class AppModel: ObservableObject {
 
     /// Change a task's status and persist it to Notion. Pessimistic: the row
     /// updates only after the write succeeds, so a failed write causes no
-    /// optimistic drift.
+    /// optimistic drift. A no-op on a provisional quick-capture row (#37) - its
+    /// `temp-` id isn't a real page yet, so a write would 404.
     public func setStatus(taskID: String, to newStatus: String) async {
-        guard case .loaded = state else { return }
+        guard case .loaded(let current) = state else { return }
         guard let token = tokenStore.read(), !token.isEmpty else { return }
+        guard let task = current.first(where: { $0.id == taskID }), !task.isProvisional else { return }
         writeError = nil
+        switch await performStatusWrite(taskID: taskID, to: newStatus, token: token) {
+        case .success:
+            applyStatus(newStatus, to: taskID)
+        case .failed:
+            writeError = "Couldn't update that task in Notion — it's unchanged. Try again."
+        case .unauthorized:
+            break // performStatusWrite has already routed to reconnect (#13)
+        }
+    }
+
+    /// The Notion status PATCH, split out so both the pessimistic `setStatus`
+    /// and the optimistic-tick `complete` (#36) share one write path. It does
+    /// only the network call and the auth-failure routing; the caller decides
+    /// what to do with the row on each outcome. Deliberately does *not* mutate
+    /// the task's local status - the callers do that at the right moment, so the
+    /// tick can dwell before the row's status actually flips.
+    private enum StatusWriteOutcome { case success, failed, unauthorized }
+    private func performStatusWrite(taskID: String, to newStatus: String, token: String) async -> StatusWriteOutcome {
         do {
             try await makeClient(token).updateStatus(pageID: taskID, to: newStatus)
-            // Re-read the state as it is *now*: the await is a MainActor
-            // suspension point, so another write or a refresh may have landed
-            // meanwhile — mapping a pre-await snapshot back in would clobber
-            // their result (issue #12).
-            guard case .loaded(let current) = state else { return }
-            let updated = current.map { task in
-                task.id == taskID ? task.withStatus(newStatus) : task
-            }
-            state = .loaded(updated)
-            // Keep the cache in step, or a relaunch resurrects the old status
-            // from the stale snapshot. A write isn't a fetch, so the snapshot
-            // keeps its fetch time.
-            cache?.save(CachedSnapshot(
-                tasks: updated, openStatuses: openStatuses, workCategory: workCategory,
-                personalCategories: personalCategories, schemaOptions: schemaOptions,
-                fetchedAt: lastRefreshed ?? now()))
+            return .success
         } catch NotionClientError.unauthorized {
             // The token died between the load and this write. "Try again" can
             // never succeed, so mirror the load path (issue #13): drop the
             // token and route the user back to entering one.
             try? tokenStore.delete()
             state = .failed("Notion rejected the stored token, so that change wasn't saved. Enter a new token to reconnect.")
+            return .unauthorized
         } catch {
-            writeError = "Couldn't update that task in Notion — it's unchanged. Try again."
+            return .failed
         }
+    }
+
+    /// Set a task's status in the loaded state and keep the cache in step,
+    /// re-reading state each call so it is safe across a write's await
+    /// suspension point (issue #12). The mirror of `applyTitle`/`applyPriority`.
+    private func applyStatus(_ status: String?, to taskID: String) {
+        guard case .loaded(let current) = state else { return }
+        let updated = current.map { $0.id == taskID ? $0.withStatus(status) : $0 }
+        state = .loaded(updated)
+        persistCache(updated)
+    }
+
+    /// One-click complete with a visible tick (#36): show the tick at once, hold
+    /// it for `completionDwell`, then collapse the row out. The write runs in
+    /// parallel behind the dwell; the row's status is flipped to Done only once
+    /// the write has *confirmed* and the dwell has elapsed, so the row is never
+    /// yanked away mid-tick and a slow write simply extends the dwell rather than
+    /// flickering. On failure the row bounces back at its original position with
+    /// a highlight flash and the standard write-error banner. Re-clicks while a
+    /// task is already dwelling are inert. Both the row checkbox and the row
+    /// menu's Status → Done route here, so they behave identically.
+    public func complete(taskID: String) async {
+        guard case .loaded(let current) = state else { return }
+        guard let token = tokenStore.read(), !token.isEmpty else { return }
+        guard let task = current.first(where: { $0.id == taskID }) else { return }
+        // A provisional row has no real page (#37); an already-Done task has
+        // nothing to complete; and once a task is dwelling, further clicks are
+        // inert (no undo - a real cancel would need a deferred write).
+        guard !task.isProvisional, task.status != "Done" else { return }
+        guard pendingCompletion.insert(taskID).inserted else { return }
+        let originalStatus = task.status
+        writeError = nil
+        // Fully optimistic: fire the write but don't block the dwell on it. The
+        // row holds its tick for exactly `completionDwell`, whether or not the
+        // write has returned.
+        let write = Task { await performStatusWrite(taskID: taskID, to: "Done", token: token) }
+        await uiSleep(Self.completionDwell)
+        // The dwell has elapsed: flip to Done and stop dwelling in one
+        // synchronous stretch (no await between), so the view sees a single
+        // reflow - the row is Done and no longer force-shown, so it collapses
+        // out. This happens regardless of whether the write has landed yet.
+        applyStatus("Done", to: taskID)
+        pendingCompletion.remove(taskID)
+        // Reconcile with the write. A transient failure rolls the row back to
+        // its original status - bringing it back at its place - with a flash and
+        // the standard banner; an auth failure has already routed to reconnect,
+        // so the `applyStatus` above was a guarded no-op against `.failed`.
+        switch await write.value {
+        case .success:
+            break
+        case .failed:
+            applyStatus(originalStatus, to: taskID)
+            flashRestored(taskID)
+            writeError = "Couldn't update that task in Notion — it's unchanged. Try again."
+        case .unauthorized:
+            break
+        }
+    }
+
+    /// Highlight a bounced-back row briefly after a failed completion (#36),
+    /// then clear it. The membership drives the view's tint flash.
+    private func flashRestored(_ taskID: String) {
+        restoredCompletions.insert(taskID)
+        Task { [weak self, uiSleep] in
+            await uiSleep(Self.restoreFlash)
+            self?.restoredCompletions.remove(taskID)
+        }
+    }
+
+    /// Start working on a task in Claude Code (#35): flip it to In Progress
+    /// unless it's already In Progress or Done, reusing the pessimistic write
+    /// path. The iTerm2 launch itself is the shell's job (it needs AppKit and
+    /// AppleScript); this owns only the status side, so the skip logic is
+    /// testable without a terminal. A no-op on a provisional row (#37).
+    public func beginWorking(taskID: String) async {
+        guard case .loaded(let current) = state else { return }
+        guard let task = current.first(where: { $0.id == taskID }), !task.isProvisional else { return }
+        guard task.status != "In Progress", task.status != "Done" else { return }
+        await setStatus(taskID: taskID, to: "In Progress")
+    }
+
+    /// Change the Claude Code workspace directory (#35): trim, persist, publish.
+    /// A blank value is ignored - there'd be nowhere to launch. Mirrors
+    /// `setAutoRefreshInterval`.
+    public func setClaudeWorkspaceDirectory(_ directory: String) {
+        let trimmed = directory.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        claudeWorkspaceDirectory = trimmed
+        preferences?.claudeWorkspaceDirectory = trimmed
     }
 
     /// Rename a task and persist it to Notion (#28). Optimistic, unlike the
@@ -239,7 +391,7 @@ public final class AppModel: ObservableObject {
     public func setTitle(taskID: String, to newTitle: String) async {
         guard case .loaded(let current) = state else { return }
         guard let token = tokenStore.read(), !token.isEmpty else { return }
-        guard let original = current.first(where: { $0.id == taskID }) else { return }
+        guard let original = current.first(where: { $0.id == taskID }), !original.isProvisional else { return }
         let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         // Empty reverts to the original (a blank task is unrecoverable from
         // this UI); an unchanged title isn't worth a round-trip.
@@ -274,10 +426,7 @@ public final class AppModel: ObservableObject {
         guard case .loaded(let current) = state else { return }
         let updated = current.map { $0.id == taskID ? $0.withTitle(title) : $0 }
         state = .loaded(updated)
-        cache?.save(CachedSnapshot(
-            tasks: updated, openStatuses: openStatuses, workCategory: workCategory,
-            personalCategories: personalCategories, schemaOptions: schemaOptions,
-            fetchedAt: lastRefreshed ?? now()))
+        persistCache(updated)
     }
 
     /// Re-prioritise a task and persist it (#33). Optimistic like `setTitle`:
@@ -288,7 +437,7 @@ public final class AppModel: ObservableObject {
     public func setPriority(taskID: String, to newPriority: String?) async {
         guard case .loaded(let current) = state else { return }
         guard let token = tokenStore.read(), !token.isEmpty else { return }
-        guard let original = current.first(where: { $0.id == taskID }) else { return }
+        guard let original = current.first(where: { $0.id == taskID }), !original.isProvisional else { return }
         guard newPriority != original.priority else { return }
         writeError = nil
         // Show the change immediately; the write catches up.
@@ -317,7 +466,7 @@ public final class AppModel: ObservableObject {
     public func setDueDate(taskID: String, to newDueDate: Date?, calendar: Calendar = .current) async {
         guard case .loaded(let current) = state else { return }
         guard let token = tokenStore.read(), !token.isEmpty else { return }
-        guard let original = current.first(where: { $0.id == taskID }) else { return }
+        guard let original = current.first(where: { $0.id == taskID }), !original.isProvisional else { return }
         let sameDay: Bool
         switch (newDueDate, original.dueDate) {
         case (nil, nil): sameDay = true
@@ -347,10 +496,7 @@ public final class AppModel: ObservableObject {
         guard case .loaded(let current) = state else { return }
         let updated = current.map { $0.id == taskID ? $0.withPriority(priority) : $0 }
         state = .loaded(updated)
-        cache?.save(CachedSnapshot(
-            tasks: updated, openStatuses: openStatuses, workCategory: workCategory,
-            personalCategories: personalCategories, schemaOptions: schemaOptions,
-            fetchedAt: lastRefreshed ?? now()))
+        persistCache(updated)
     }
 
     /// Set a task's due date in the loaded state and keep the cache in step,
@@ -359,8 +505,18 @@ public final class AppModel: ObservableObject {
         guard case .loaded(let current) = state else { return }
         let updated = current.map { $0.id == taskID ? $0.withDueDate(dueDate) : $0 }
         state = .loaded(updated)
+        persistCache(updated)
+    }
+
+    /// Save the loaded tasks to the cache, minus any provisional quick-capture
+    /// rows (#37): the cache holds only Notion-confirmed tasks, so a crash mid-
+    /// capture self-heals on the next poll (the task lands for real) rather than
+    /// leaving a ghost row with a fake `temp-` id. A write isn't a fetch, so the
+    /// snapshot keeps its fetch time. One boundary for every write path.
+    private func persistCache(_ tasks: [NotionTask]) {
         cache?.save(CachedSnapshot(
-            tasks: updated, openStatuses: openStatuses, workCategory: workCategory,
+            tasks: tasks.filter { !$0.isProvisional },
+            openStatuses: openStatuses, workCategory: workCategory,
             personalCategories: personalCategories, schemaOptions: schemaOptions,
             fetchedAt: lastRefreshed ?? now()))
     }
@@ -476,12 +632,8 @@ public final class AppModel: ObservableObject {
             guard case .loaded(let current) = state else { return true }
             let updated = current + [created]
             state = .loaded(updated)
-            // Keep the cache in step, as setStatus does. A write isn't a
-            // fetch, so the snapshot keeps its fetch time.
-            cache?.save(CachedSnapshot(
-                tasks: updated, openStatuses: openStatuses, workCategory: workCategory,
-                personalCategories: personalCategories, schemaOptions: schemaOptions,
-                fetchedAt: lastRefreshed ?? now()))
+            // Keep the cache in step, as setStatus does.
+            persistCache(updated)
             // The task is real wherever the panel is pointing — but if it
             // doesn't match the active view's filter, say so rather than let
             // Add appear to have done nothing.
@@ -516,37 +668,80 @@ public final class AppModel: ObservableObject {
     /// open; a 401 drops the token and routes to reconnect like every write
     /// path (#13). No "not visible in this view" notice: that reassures someone
     /// watching the composer, and here there's no composer and no one watching.
-    public func captureTask(_ draft: TaskDraft) async {
-        guard let token = tokenStore.read(), !token.isEmpty else { return }
+    ///
+    /// Optimistic (#37): when a list is already on screen, a provisional row is
+    /// inserted *before* the create round-trip so the task appears in the menu
+    /// instantly, then swapped for the real task on success or rolled back on
+    /// failure. The returned `CaptureOutcome` lets the shell preserve the full
+    /// draft for retry when a transient failure loses the row.
+    @discardableResult
+    public func captureTask(_ draft: TaskDraft) async -> CaptureOutcome {
+        guard let token = tokenStore.read(), !token.isEmpty else { return .notCaptured }
         var draft = draft
         draft.title = draft.trimmedTitle
-        guard !draft.title.isEmpty else { return }
+        guard !draft.title.isEmpty else { return .notCaptured }
         captureError = nil
+
+        // Insert a provisional row at once when a list is on screen, so the task
+        // shows before the create returns. If nothing is loaded (offline launch,
+        // say), skip the optimistic insert: the task is safely created regardless
+        // and the next fetch surfaces it. Status defaults to "To Do", the DB
+        // default Notion applies (createTask omits Status deliberately); the
+        // created time is now so it sorts correctly in Created-desc views.
+        let tempID: String?
+        if case .loaded(let current) = state {
+            let id = "temp-\(UUID().uuidString)"
+            let provisional = NotionTask(
+                id: id, title: draft.title, status: "To Do",
+                priority: draft.priority, dueDate: draft.dueDate, category: draft.category,
+                startFrom: nil, createdTime: now(), lastEditedTime: nil, workType: nil, url: nil)
+            state = .loaded(current + [provisional])
+            tempID = id
+        } else {
+            tempID = nil
+        }
+        capturesInFlight += 1
+        defer { capturesInFlight -= 1 }
         do {
             let created = try await makeClient(token)
                 .createTask(draft, titleProperty: titleProperty)
-            // Re-read state after the await (issue #12). If a list is on screen,
-            // show the new row and keep the cache in step; if nothing is loaded
-            // (offline launch, say), the task is safely in Notion regardless and
-            // the next fetch surfaces it.
-            guard case .loaded(let current) = state else { return }
-            let updated = current + [created]
+            // Re-read state after the await (issue #12) and swap the provisional
+            // row for the real task, matched by the temp id captured above. If
+            // the row is gone (a sign-out, say), append the real task instead.
+            guard case .loaded(let current) = state else { return .captured }
+            var updated = current
+            if let tempID, let index = updated.firstIndex(where: { $0.id == tempID }) {
+                updated[index] = created
+            } else {
+                updated.append(created)
+            }
             state = .loaded(updated)
-            cache?.save(CachedSnapshot(
-                tasks: updated, openStatuses: openStatuses, workCategory: workCategory,
-                personalCategories: personalCategories, schemaOptions: schemaOptions,
-                fetchedAt: lastRefreshed ?? now()))
+            persistCache(updated)
+            return .captured
         } catch NotionClientError.unauthorized {
             // A dead token can't be retried into working; drop it and route to
             // reconnect (#13). The panel's next open shows the token screen, not
             // a banner - there's nothing to capture into until it's reconnected.
+            removeProvisional(tempID)
             try? tokenStore.delete()
             state = .failed("Notion rejected the stored token, so that task wasn't created. Enter a new token to reconnect.")
+            return .authFailure
         } catch NotionClientError.rateLimited {
+            removeProvisional(tempID)
             captureError = "A task you captured wasn't saved - Notion was rate-limiting the app. Try adding it again."
+            return .transientFailure
         } catch {
+            removeProvisional(tempID)
             captureError = "A task you captured wasn't saved to Notion. Try adding it again."
+            return .transientFailure
         }
+    }
+
+    /// Roll a provisional quick-capture row back out of the loaded list (#37),
+    /// re-reading state so it is safe across the create's await suspension point.
+    private func removeProvisional(_ tempID: String?) {
+        guard let tempID, case .loaded(let current) = state else { return }
+        state = .loaded(current.filter { $0.id != tempID })
     }
 
     /// The main panel clears a shown capture failure when it closes (#34), so a
@@ -582,8 +777,12 @@ public final class AppModel: ObservableObject {
                 await pollSleep(interval)
                 guard !Task.isCancelled, let self else { return }
                 // A wholesale refresh would clobber an inline rename in
-                // progress (#28); skip this tick, the next one refreshes.
-                if self.editingTaskID != nil { continue }
+                // progress (#28), drop a provisional quick-capture row before
+                // its create returns (#37), or flip a task to Done mid-tick
+                // (#36). Skip this tick in any of those cases; the next one
+                // refreshes once they've settled.
+                if self.editingTaskID != nil || self.capturesInFlight > 0
+                    || !self.pendingCompletion.isEmpty { continue }
                 await self.refresh()
             }
         }
@@ -712,6 +911,15 @@ public final class AppModel: ObservableObject {
     /// filter/sort (#6). Recomputed from the raw `.loaded` tasks, so a status
     /// change, a preset switch, or a query edit all reflow it for free. `today`
     /// is injectable for tests; the app passes the real date.
+    ///
+    /// A completing task (#36) stays visible here without a special case: its
+    /// real status is left open until `complete` flips it to Done and drops it
+    /// from `pendingCompletion` in the same synchronous stretch at the end of
+    /// the dwell. So a task is either open-and-dwelling (shown, ticked by
+    /// `pendingCompletion`) or Done-and-not-dwelling (filtered out) - never
+    /// Done-but-still-ticked - and a failed write rolls the status back so it
+    /// reappears. A mid-dwell poll can't flip it either: the poll loop skips
+    /// while `pendingCompletion` is non-empty.
     public func groups(today: Date = Date(), calendar: Calendar = .current) -> [TaskGroup] {
         guard case .loaded(let tasks) = state else { return [] }
         // Apply the title search first (#32): filtering before grouping drops
@@ -740,6 +948,13 @@ public final class AppModel: ObservableObject {
         schemaOptions = snapshot.schemaOptions
         state = .loaded(snapshot.tasks)
         lastRefreshed = snapshot.fetchedAt
+    }
+
+    /// The still-pending provisional quick-capture rows in the loaded state
+    /// (#37), carried across a fetch so an in-flight capture's row survives.
+    private func pendingProvisionalRows() -> [NotionTask] {
+        guard case .loaded(let current) = state else { return [] }
+        return current.filter { $0.isProvisional }
     }
 
     private func load(token: String) async {
@@ -775,15 +990,18 @@ public final class AppModel: ObservableObject {
                 schemaFailed = true
             }
             let tasks = try await client.fetchTasks()
-            state = .loaded(tasks)
+            // A quick-capture whose create was already in flight when this fetch
+            // started won't be in `tasks` yet (#37). Carry any still-pending
+            // provisional rows across the load so a mid-flight fetch doesn't make
+            // the row flicker out; the create's own success/rollback reconciles
+            // them. The cache save below strips them, so the snapshot stays clean.
+            let merged = tasks + pendingProvisionalRows()
+            state = .loaded(merged)
             schemaWarning = schemaFailed
                 ? "Couldn't load the filter options from Notion - filters and grouping may be out of date."
                 : nil
             lastRefreshed = now()
-            cache?.save(CachedSnapshot(
-                tasks: tasks, openStatuses: openStatuses, workCategory: workCategory,
-                personalCategories: personalCategories, schemaOptions: schemaOptions,
-                fetchedAt: lastRefreshed ?? now()))
+            persistCache(merged)
         } catch is CancellationError {
             // The fetch was torn down on purpose — a poll restart (#27) or
             // sign-out cancelled its task. No news, not a failure; the next

@@ -64,6 +64,7 @@ final class InMemoryPreferences: PreferencesStore {
     var viewConfig: ViewConfig?
     var collapsedGroups: Set<String>?
     var hotKey: HotKey?
+    var claudeWorkspaceDirectory: String?
     init(autoRefreshInterval: TimeInterval? = nil) {
         self.autoRefreshInterval = autoRefreshInterval
     }
@@ -104,6 +105,24 @@ actor PollTicker {
 
     @Sendable func sleep(_ interval: TimeInterval) async {
         intervals.append(interval)
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func tick() {
+        waiters.forEach { $0.resume() }
+        waiters.removeAll()
+    }
+}
+
+/// The UI-timing seam's test double (#36): like `PollTicker`, each `sleep`
+/// parks until released with `tick()`, so a check can hold the completion tick
+/// mid-dwell and observe the ticked-but-not-yet-collapsed row before it exits.
+actor UITicker {
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private(set) var sleepCount = 0
+
+    @Sendable func sleep(_ interval: TimeInterval) async {
+        sleepCount += 1
         await withCheckedContinuation { waiters.append($0) }
     }
 
@@ -172,6 +191,31 @@ actor PatchGateHTTPClient: HTTPClient {
 
     func data(for request: URLRequest) async throws -> (Data, URLResponse) {
         if request.httpMethod == "PATCH", !isOpen {
+            await withCheckedContinuation { waiters.append($0) }
+        }
+        return try await inner.data(for: request)
+    }
+}
+
+/// Holds only the create (POST /v1/pages) at a gate, letting reads and other
+/// writes straight through (#37) - so a check can observe the provisional row
+/// while its create is in flight, and land a full refresh across it.
+actor CreateGateHTTPClient: HTTPClient {
+    private let inner: HTTPClient
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(wrapping inner: HTTPClient) { self.inner = inner }
+
+    func open() {
+        isOpen = true
+        waiters.forEach { $0.resume() }
+        waiters.removeAll()
+    }
+
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        if request.httpMethod == "POST",
+           request.url?.absoluteString.hasSuffix("/pages") == true, !isOpen {
             await withCheckedContinuation { waiters.append($0) }
         }
         return try await inner.data(for: request)
@@ -2189,5 +2233,352 @@ func appModelChecks(_ t: CheckRun) async {
         t.expect(!stub.requests.contains {
             $0.httpMethod == "POST" && $0.url?.absoluteString.hasSuffix("/pages") == true
         }, "a blank capture is not worth a write")
+    }
+
+    t.suite("AppModel optimistic quick-capture (#37)")
+
+    func routingStub() throws -> RoutingStubHTTPClient {
+        RoutingStubHTTPClient(
+            schema: try fixtureData("data_source_schema"),
+            query: try fixtureData("query_response"))
+    }
+
+    /// Spin the cooperative executor until `condition` holds or we give up, so a
+    /// check can wait for an async side effect (a provisional insert, a tick)
+    /// without a real sleep.
+    func spin(until condition: @escaping () -> Bool) async {
+        var spins = 0
+        while !condition(), spins < 1000 { await Task.yield(); spins += 1 }
+    }
+
+    await t.test("a provisional row appears before the create returns, then swaps for the real task") {
+        let routing = try routingStub()
+        routing.create = createdPageJSON(id: "cap-real", title: "Call the plumber", category: "👨🏻‍💻 Work")
+        let gate = CreateGateHTTPClient(wrapping: routing)
+        let cache = InMemoryTaskCache()
+        let model = AppModel(tokenStore: InMemoryTokenStore(seed: "ntn_saved"), cache: cache) {
+            NotionClient(dataSourceID: ds, token: $0, http: gate, sleep: { _ in })
+        }
+        await model.start()
+
+        let capture = Task { await model.captureTask(TaskDraft(title: "Call the plumber", category: "👨🏻‍💻 Work")) }
+        await spin { if case .loaded(let tasks) = model.state { return tasks.contains { $0.isProvisional } }; return false }
+
+        guard case .loaded(let midFlight) = model.state else { t.expect(false, "expected .loaded"); return }
+        let temp = midFlight.first { $0.isProvisional }
+        t.expect(temp != nil, "a provisional row must show before the create returns")
+        t.expectEqual(temp?.title, "Call the plumber")
+        t.expect(temp?.status == "To Do", "the provisional row defaults to the DB's To Do status")
+        t.expect(cache.saved.last?.tasks.contains { $0.isProvisional } != true, "a temp row must never be cached")
+
+        await gate.open()
+        let outcome = await capture.value
+        t.expectEqual(outcome, .captured)
+        guard case .loaded(let after) = model.state else { t.expect(false, "expected .loaded"); return }
+        t.expect(!after.contains { $0.isProvisional }, "the temp row must be gone after reconcile")
+        t.expect(after.contains { $0.id == "cap-real" }, "the real task must replace the temp row")
+        t.expect(cache.saved.last?.tasks.contains { $0.id == "cap-real" } == true, "the real task must be cached")
+        t.expect(cache.saved.last?.tasks.contains { $0.isProvisional } != true, "the cache must never hold a temp row")
+    }
+
+    await t.test("a transient capture failure rolls the provisional row back and preserves nothing in the cache") {
+        let routing = try routingStub()
+        routing.createStatusCode = 500
+        let cache = InMemoryTaskCache()
+        let model = await loadedModel(stub: routing, cache: cache)
+        guard case .loaded(let before) = model.state else { t.expect(false, "expected .loaded"); return }
+        let savesBefore = cache.saved.count
+
+        let outcome = await model.captureTask(
+            TaskDraft(title: "Doomed", priority: "P1", category: "👨🏻‍💻 Work"))
+
+        t.expectEqual(outcome, .transientFailure)
+        guard case .loaded(let after) = model.state else { t.expect(false, "expected .loaded"); return }
+        t.expectEqual(after.map(\.id), before.map(\.id)) // the provisional row is gone
+        t.expect(!after.contains { $0.isProvisional }, "no provisional row must survive a failure")
+        t.expect(model.captureError != nil, "the failure must surface for the next panel open")
+        t.expectEqual(cache.saved.count, savesBefore) // a failed create writes nothing to the cache
+    }
+
+    await t.test("a 401 while capturing removes the provisional row, drops the token, and reports authFailure") {
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let routing = try routingStub()
+        let model = AppModel(tokenStore: store) {
+            NotionClient(dataSourceID: ds, token: $0, http: routing, sleep: { _ in })
+        }
+        await model.start()
+        routing.createStatusCode = 401
+
+        let outcome = await model.captureTask(TaskDraft(title: "Rejected"))
+
+        t.expectEqual(outcome, .authFailure)
+        t.expect(store.read() == nil, "a rejected token must be dropped")
+        if case .failed = model.state {} else { t.expect(false, "a dead token must route to reconnect, got \(model.state)") }
+    }
+
+    await t.test("a refresh landing mid-capture keeps the provisional row from flickering out") {
+        let routing = try routingStub()
+        routing.create = createdPageJSON(id: "cap-late", title: "Later", category: "👨🏻‍💻 Work")
+        let gate = CreateGateHTTPClient(wrapping: routing)
+        let model = AppModel(tokenStore: InMemoryTokenStore(seed: "ntn_saved")) {
+            NotionClient(dataSourceID: ds, token: $0, http: gate, sleep: { _ in })
+        }
+        await model.start()
+
+        let capture = Task { await model.captureTask(TaskDraft(title: "Later", category: "👨🏻‍💻 Work")) }
+        await spin { if case .loaded(let tasks) = model.state { return tasks.contains { $0.isProvisional } }; return false }
+
+        // A full refresh lands while the create is still in flight; the reads
+        // succeed (only the create is gated), and the fetch must not drop the row.
+        await model.refresh()
+        guard case .loaded(let afterRefresh) = model.state else { t.expect(false, "expected .loaded"); return }
+        t.expect(afterRefresh.contains { $0.isProvisional },
+                 "a mid-capture refresh must carry the provisional row across")
+
+        await gate.open()
+        _ = await capture.value
+        guard case .loaded(let after) = model.state else { t.expect(false, "expected .loaded"); return }
+        t.expect(!after.contains { $0.isProvisional }, "the row reconciles once the create returns")
+        t.expect(after.contains { $0.id == "cap-late" }, "the real task lands")
+    }
+
+    await t.test("two concurrent captures each show a row and reconcile without cross-talk") {
+        let routing = try routingStub()
+        routing.create = createdPageJSON(id: "cap-x", title: "X", category: "👨🏻‍💻 Work")
+        let gate = CreateGateHTTPClient(wrapping: routing)
+        let model = AppModel(tokenStore: InMemoryTokenStore(seed: "ntn_saved")) {
+            NotionClient(dataSourceID: ds, token: $0, http: gate, sleep: { _ in })
+        }
+        await model.start()
+        guard case .loaded(let before) = model.state else { t.expect(false, "expected .loaded"); return }
+
+        let a = Task { await model.captureTask(TaskDraft(title: "First", category: "👨🏻‍💻 Work")) }
+        let b = Task { await model.captureTask(TaskDraft(title: "Second", category: "👨🏻‍💻 Work")) }
+        await spin { if case .loaded(let tasks) = model.state { return tasks.filter { $0.isProvisional }.count == 2 }; return false }
+        guard case .loaded(let midFlight) = model.state else { t.expect(false, "expected .loaded"); return }
+        t.expectEqual(midFlight.filter { $0.isProvisional }.count, 2)
+
+        await gate.open()
+        _ = await a.value
+        _ = await b.value
+        guard case .loaded(let after) = model.state else { t.expect(false, "expected .loaded"); return }
+        t.expect(!after.contains { $0.isProvisional }, "both temp rows must clear - no orphan from cross-talk")
+        t.expectEqual(after.count, before.count + 2) // two captures, two rows reconciled
+    }
+
+    await t.test("row actions are inert on a provisional quick-capture row") {
+        let routing = try routingStub()
+        let gate = CreateGateHTTPClient(wrapping: routing)
+        let model = AppModel(tokenStore: InMemoryTokenStore(seed: "ntn_saved")) {
+            NotionClient(dataSourceID: ds, token: $0, http: gate, sleep: { _ in })
+        }
+        await model.start()
+
+        let capture = Task { await model.captureTask(TaskDraft(title: "Pending", category: "👨🏻‍💻 Work")) }
+        await spin { if case .loaded(let tasks) = model.state { return tasks.contains { $0.isProvisional } }; return false }
+        guard case .loaded(let tasks) = model.state, let temp = tasks.first(where: { $0.isProvisional }) else {
+            t.expect(false, "expected a provisional row"); return
+        }
+        let writesBefore = routing.requests.filter { $0.httpMethod == "PATCH" }.count
+
+        await model.setStatus(taskID: temp.id, to: "Done")
+        await model.setPriority(taskID: temp.id, to: "P0")
+        await model.setDueDate(taskID: temp.id, to: createToday)
+        await model.setTitle(taskID: temp.id, to: "Renamed")
+        await model.complete(taskID: temp.id)
+
+        t.expectEqual(routing.requests.filter { $0.httpMethod == "PATCH" }.count, writesBefore) // no write fired
+        t.expect(!model.pendingCompletion.contains(temp.id), "complete must not tick a temp row")
+        guard case .loaded(let after) = model.state, let same = after.first(where: { $0.id == temp.id }) else {
+            t.expect(false, "the temp row must be untouched"); return
+        }
+        t.expectEqual(same.title, "Pending")
+
+        await gate.open()
+        _ = await capture.value
+    }
+
+    await t.test("capturing before a list is loaded falls back to a plain create") {
+        let routing = try routingStub()
+        routing.create = createdPageJSON(id: "cap-fallback", title: "Offline capture")
+        let model = AppModel(tokenStore: InMemoryTokenStore(seed: "ntn_saved")) {
+            NotionClient(dataSourceID: ds, token: $0, http: routing, sleep: { _ in })
+        }
+        // No start(): state is .needsToken, not .loaded.
+
+        let outcome = await model.captureTask(TaskDraft(title: "Offline capture"))
+
+        t.expectEqual(outcome, .captured)
+        t.expect(routing.requests.contains {
+            $0.httpMethod == "POST" && $0.url?.absoluteString.hasSuffix("/pages") == true
+        }, "the task must still be created even with no list on screen")
+        if case .loaded = model.state { t.expect(false, "capturing without a load must not fabricate a loaded state") }
+    }
+
+    t.suite("AppModel completion tick (#36)")
+
+    /// A loaded model on All open (every open task visible) with the UI-timing
+    /// seam driven by `ticker`, so a check can hold the completion dwell.
+    func completionModel(stub: RoutingStubHTTPClient, ticker: UITicker,
+                         store: InMemoryTokenStore = InMemoryTokenStore(seed: "ntn_saved"),
+                         cache: InMemoryTaskCache? = nil) async -> AppModel {
+        let model = AppModel(tokenStore: store, cache: cache, uiSleep: ticker.sleep) {
+            NotionClient(dataSourceID: ds, token: $0, http: stub, sleep: { _ in })
+        }
+        await model.start()
+        model.selectPreset(.allOpen)
+        return model
+    }
+
+    func isVisible(_ id: String, in model: AppModel) -> Bool {
+        model.groups().contains { $0.tasks.contains { $0.id == id } }
+    }
+
+    await t.test("completing shows the tick at once, holds the row through the dwell, then collapses it on success") {
+        let routing = try routingStub()
+        let ticker = UITicker()
+        let model = await completionModel(stub: routing, ticker: ticker)
+
+        let complete = Task { await model.complete(taskID: firstTaskID) }
+        await spin { model.pendingCompletion.contains(firstTaskID) }
+
+        t.expect(model.pendingCompletion.contains(firstTaskID), "the tick must show at once")
+        t.expect(isVisible(firstTaskID, in: model), "the row stays visible while it dwells ticked")
+
+        await ticker.tick() // the dwell elapses
+        _ = await complete.value
+
+        t.expect(!model.pendingCompletion.contains(firstTaskID), "no longer dwelling after success")
+        t.expect(!isVisible(firstTaskID, in: model), "the completed row collapses out")
+        if case .loaded(let tasks) = model.state {
+            t.expectEqual(tasks.first { $0.id == firstTaskID }?.status, "Done")
+        }
+    }
+
+    await t.test("a re-click while a task is dwelling is inert - no second write") {
+        let routing = try routingStub()
+        let ticker = UITicker()
+        let model = await completionModel(stub: routing, ticker: ticker)
+
+        let complete = Task { await model.complete(taskID: firstTaskID) }
+        await spin { model.pendingCompletion.contains(firstTaskID) }
+        await model.complete(taskID: firstTaskID) // re-click mid-dwell: must return at once, inert
+
+        await ticker.tick()
+        _ = await complete.value
+        t.expect(routing.requests.filter { $0.httpMethod == "PATCH" }.count == 1,
+                 "two clicks on a dwelling task must still fire exactly one write")
+    }
+
+    await t.test("a failed completion write bounces the row back, flashes it, and surfaces a write error") {
+        let routing = try routingStub()
+        let ticker = UITicker()
+        let model = await completionModel(stub: routing, ticker: ticker)
+        // The status PATCH routes to the stub's default branch; fail it now that
+        // the load has finished, so only the completion write 500s.
+        routing.schemaStatusCode = 500
+
+        let complete = Task { await model.complete(taskID: firstTaskID) }
+        await spin { model.pendingCompletion.contains(firstTaskID) }
+        await ticker.tick()
+        _ = await complete.value
+
+        t.expect(!model.pendingCompletion.contains(firstTaskID), "no longer dwelling")
+        t.expect(isVisible(firstTaskID, in: model), "a failed completion leaves the row - it bounced back")
+        t.expect(model.restoredCompletions.contains(firstTaskID), "the bounced-back row flashes")
+        t.expect(model.writeError != nil, "the failure surfaces the write-error banner")
+        if case .loaded(let tasks) = model.state {
+            t.expectEqual(tasks.first { $0.id == firstTaskID }?.status, "In Progress") // unchanged
+        }
+    }
+
+    await t.test("a 401 during completion drops the token and routes to reconnect") {
+        let store = InMemoryTokenStore(seed: "ntn_saved")
+        let routing = try routingStub()
+        let ticker = UITicker()
+        let model = await completionModel(stub: routing, ticker: ticker, store: store)
+        routing.schemaStatusCode = 401 // the completion PATCH 401s
+
+        let complete = Task { await model.complete(taskID: firstTaskID) }
+        await spin { model.pendingCompletion.contains(firstTaskID) }
+        await ticker.tick()
+        _ = await complete.value
+
+        t.expect(store.read() == nil, "a rejected token must be dropped")
+        if case .failed = model.state {} else { t.expect(false, "must route to reconnect, got \(model.state)") }
+        t.expect(!model.pendingCompletion.contains(firstTaskID), "the dwell set clears on auth failure")
+    }
+
+    t.suite("AppModel work in Claude Code (#35)")
+
+    let doneID = "11111111-0000-0000-0000-000000000004" // "Renew SSL certificate", Done
+    let todoID = "11111111-0000-0000-0000-000000000002" // "Draft the Q3 board update", To Do
+
+    await t.test("the Claude seed carries the title and url, degrading to title-only when there's no url") {
+        t.expectEqual(ClaudeCodeLaunch.seed(title: "Fix the bike", url: "https://www.notion.so/abc"),
+                      "Help with: Fix the bike (https://www.notion.so/abc)")
+        t.expectEqual(ClaudeCodeLaunch.seed(title: "Fix the bike", url: nil), "Help with: Fix the bike")
+        t.expectEqual(ClaudeCodeLaunch.seed(title: "Fix the bike", url: ""), "Help with: Fix the bike")
+    }
+
+    await t.test("the shell command escapes the seed and directory, and expands a leading tilde") {
+        let seed = ClaudeCodeLaunch.seed(title: "Fix O'Brien's $PATH `now`", url: nil)
+        let cmd = ClaudeCodeLaunch.shellCommand(
+            workspaceDirectory: "~/Documents/workspace", seed: seed, home: "/Users/tester")
+        // The tilde expands (the shell won't expand it inside single quotes).
+        t.expect(cmd.hasPrefix("cd '/Users/tester/Documents/workspace' && claude '"),
+                 "tilde must expand and the dir be quoted; was \(cmd)")
+        // The apostrophes are broken out with the '\'' idiom, so nothing injects.
+        t.expect(cmd.contains("O'\\''Brien'\\''s"), "single quotes must be escaped; was \(cmd)")
+        // A `$` and backticks inside single quotes are inert - carried verbatim.
+        t.expect(cmd.contains("$PATH `now`"), "shell metacharacters must be carried literally; was \(cmd)")
+    }
+
+    await t.test("the iTerm AppleScript embeds the command as an escaped string literal") {
+        let script = ClaudeCodeLaunch.iTermScript(command: "echo \"hi\" \\ bye")
+        t.expect(script.contains("tell application \"iTerm\""), "the script must target iTerm; was \(script)")
+        t.expect(script.contains("write text \"echo \\\"hi\\\" \\\\ bye\""),
+                 "the command's quotes and backslashes must be escaped for AppleScript; was \(script)")
+    }
+
+    await t.test("beginWorking flips a task to In Progress, but skips one already In Progress or Done") {
+        let routing = try routingStub()
+        let model = await loadedModel(stub: routing)
+        func patchCount() -> Int { routing.requests.filter { $0.httpMethod == "PATCH" }.count }
+
+        let before = patchCount()
+        await model.beginWorking(taskID: firstTaskID) // already In Progress → no write
+        t.expectEqual(patchCount(), before)
+        await model.beginWorking(taskID: doneID) // Done → no write
+        t.expectEqual(patchCount(), before)
+
+        await model.beginWorking(taskID: todoID) // To Do → flip to In Progress
+        t.expect(patchCount() > before, "a To Do task is moved to In Progress")
+        if case .loaded(let tasks) = model.state {
+            t.expectEqual(tasks.first { $0.id == todoID }?.status, "In Progress")
+        }
+    }
+
+    await t.test("the Claude workspace directory defaults, and a change persists and round-trips") {
+        let prefs = InMemoryPreferences()
+        let routing = try routingStub()
+        let model = AppModel(tokenStore: InMemoryTokenStore(seed: "ntn_saved"), preferences: prefs) {
+            NotionClient(dataSourceID: ds, token: $0, http: routing, sleep: { _ in })
+        }
+        t.expectEqual(model.claudeWorkspaceDirectory, "~/Documents/workspace")
+
+        model.setClaudeWorkspaceDirectory("/Users/tester/code")
+        t.expectEqual(model.claudeWorkspaceDirectory, "/Users/tester/code")
+        t.expectEqual(prefs.claudeWorkspaceDirectory, "/Users/tester/code")
+
+        model.setClaudeWorkspaceDirectory("   ") // blank is ignored - nowhere to launch
+        t.expectEqual(model.claudeWorkspaceDirectory, "/Users/tester/code")
+
+        let prefs2 = InMemoryPreferences()
+        prefs2.claudeWorkspaceDirectory = "/srv/work"
+        let model2 = AppModel(tokenStore: InMemoryTokenStore(seed: "ntn_saved"), preferences: prefs2) {
+            NotionClient(dataSourceID: ds, token: $0, http: routing, sleep: { _ in })
+        }
+        t.expectEqual(model2.claudeWorkspaceDirectory, "/srv/work")
     }
 }

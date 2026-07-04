@@ -5,8 +5,20 @@ struct ContentView: View {
     /// Opens the shell's quick-capture shortcut recorder (#34). The gear menu
     /// triggers it; recording lives in the shell (AppKit), not the view.
     var onRecordShortcut: () -> Void = {}
+    /// Launches iTerm2 + `claude` for a task (#35). The shell owns the
+    /// AppleScript launch and the iTerm2-missing alert; the view just invokes it.
+    var onWorkInClaudeCode: (NotionTask) -> Void = { _ in }
+    /// Opens a folder chooser for the Claude workspace directory (#35). NSOpenPanel
+    /// lives in the shell (AppKit), not the view.
+    var onChooseWorkspace: () -> Void = {}
 
     @EnvironmentObject private var model: AppModel
+    /// Honour Reduce Motion (#36): with it on, the completion tick's bounce and
+    /// the row's fade/collapse are skipped in favour of a plain instant cut.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The task row the pointer is over (#35): its trailing controls (the
+    /// Claude-Code launch icon and the actions menu) fade in on hover.
+    @State private var hoveredRowID: String?
     @State private var tokenField = ""
     /// The quick-add draft (#22). View state: it exists only while composing,
     /// and is re-derived from `composerDraft()` every time the composer opens.
@@ -557,6 +569,11 @@ struct ContentView: View {
     /// query clears.
     @ViewBuilder
     private func listContent(_ groups: [TaskGroup], grouped: Bool) -> some View {
+        // The flattened visible ids drive the exit animation (#36): when a
+        // completed row leaves `groups()`, this array changes and the wrapping
+        // `.animation` turns the removal into a 0.2s fade + collapse rather than
+        // a hard cut. Reduce Motion drops the animation to an instant cut.
+        let visibleIDs = groups.flatMap { $0.tasks.map(\.id) }
         VStack(alignment: .leading, spacing: 0) {
             ForEach(groups, id: \.priority) { group in
                 if grouped {
@@ -566,11 +583,13 @@ struct ContentView: View {
                     ForEach(group.tasks) { task in
                         row(for: task, showPriority: !grouped)
                             .padding(.vertical, 6)
+                            .transition(reduceMotion ? .identity : .opacity)
                         Divider()
                     }
                 }
             }
         }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: visibleIDs)
     }
 
     /// The custom view's controls (#6): one "Filter" menu (with a submenu per
@@ -727,8 +746,60 @@ struct ContentView: View {
                 metadata(for: task, showPriority: showPriority)
             }
             Spacer(minLength: 8)
-            rowActionsMenu(for: task)
+            trailingControls(for: task)
         }
+        .contentShape(Rectangle())
+        // Hover reveals the trailing controls (#35). Only clear on leave if this
+        // row is still the tracked one, so a stale leave from another row can't
+        // wipe the current hover.
+        .onHover { hovering in
+            if hovering { hoveredRowID = task.id }
+            else if hoveredRowID == task.id { hoveredRowID = nil }
+        }
+        // A brief highlight when a row bounces back after a failed completion
+        // (#36), so the eye catches which task returned.
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.accentColor)
+                .opacity(model.restoredCompletions.contains(task.id) ? 0.18 : 0)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.4),
+                           value: model.restoredCompletions.contains(task.id)))
+    }
+
+    /// The row's trailing controls (#35): a Claude-Code launch icon and the
+    /// actions menu, bare at rest and revealed together on hover. Revealed via
+    /// opacity, not conditional removal, so the actions menu keeps its layout
+    /// slot - the reschedule popover anchors to it, and the row height mustn't
+    /// jump on hover. Kept visible while this row's date popover is open, or the
+    /// pointer moving onto the popover would flicker the trigger out. A
+    /// provisional quick-capture row (#37) shows nothing: it has no real page to
+    /// launch or act on yet.
+    @ViewBuilder
+    private func trailingControls(for task: NotionTask) -> some View {
+        if !task.isProvisional {
+            let revealed = hoveredRowID == task.id || datePickerTaskID == task.id
+            HStack(spacing: 12) {
+                workInClaudeButton(for: task)
+                rowActionsMenu(for: task)
+            }
+            .opacity(revealed ? 1 : 0)
+            .allowsHitTesting(revealed)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.12), value: revealed)
+        }
+    }
+
+    /// The one-click Claude-Code launch (#35): opens iTerm2 in the workspace and
+    /// runs `claude` seeded with this task, marking it In Progress as it starts.
+    private func workInClaudeButton(for task: NotionTask) -> some View {
+        Button {
+            onWorkInClaudeCode(task)
+        } label: {
+            Image(systemName: "terminal")
+                .foregroundStyle(Color.accentColor)
+        }
+        .buttonStyle(.plain)
+        .help("Work on in Claude Code")
+        .accessibilityLabel("Work on in Claude Code")
     }
 
     /// Line 1: the title. Left-click opens the task in Notion (#21), so fields
@@ -797,19 +868,26 @@ struct ContentView: View {
         }
     }
 
-    /// One-click complete: sets the task to Done, reusing the #3 write path.
-    /// Shows filled when already Done.
+    /// One-click complete (#36): shows a green tick at once and holds it for a
+    /// beat before the row collapses out, via `AppModel.complete`. The tick is
+    /// driven by `pendingCompletion` membership (a task mid-dwell) as well as a
+    /// really-Done status. The glyph swaps with a symbol-replace transition and
+    /// a one-off bounce; both are skipped under Reduce Motion. Inert on a
+    /// provisional row (#37).
     private func completeButton(for task: NotionTask) -> some View {
-        let isDone = task.status == "Done"
+        let ticked = model.pendingCompletion.contains(task.id) || task.status == "Done"
         return Button {
-            Task { await model.setStatus(taskID: task.id, to: "Done") }
+            Task { await model.complete(taskID: task.id) }
         } label: {
-            Image(systemName: isDone ? "checkmark.circle.fill" : "circle")
-                .foregroundStyle(isDone ? Color.secondary : Color.primary)
+            Image(systemName: ticked ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(ticked ? Color.green : Color.primary)
+                .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
+                .symbolEffect(.bounce, value: reduceMotion ? false : ticked)
         }
         .buttonStyle(.plain)
-        .help(isDone ? "Done" : "Mark done")
-        .accessibilityLabel(isDone ? "Done" : "Mark done")
+        .disabled(task.isProvisional)
+        .help(ticked ? "Completing…" : "Mark done")
+        .accessibilityLabel(ticked ? "Completing" : "Mark done")
     }
 
     /// Line 2: Priority · Due date · Category, with absent fields omitted so
@@ -884,8 +962,16 @@ struct ContentView: View {
             statusSubmenu(for: task)
             priorityMenu(for: task)
             rescheduleMenu(for: task)
+            // "Work on in Claude Code" (#35): the discoverable, stable home for
+            // the launch that also lives behind the hover terminal icon.
+            Divider()
+            Button {
+                onWorkInClaudeCode(task)
+            } label: {
+                Label("Work on in Claude Code", systemImage: "terminal")
+            }
         } label: {
-            Image(systemName: "ellipsis.circle")
+            Image(systemName: "ellipsis")
                 .foregroundStyle(.secondary)
         }
         .menuStyle(.borderlessButton)
@@ -907,7 +993,14 @@ struct ContentView: View {
         Menu("Status") {
             ForEach(NotionConfig.selectableStatuses, id: \.self) { state in
                 Button {
-                    Task { await model.setStatus(taskID: task.id, to: state) }
+                    // Done routes through the same tick-and-collapse path as the
+                    // checkbox (#36), so both entry points behave identically;
+                    // the other statuses take the plain write.
+                    if state == "Done" {
+                        Task { await model.complete(taskID: task.id) }
+                    } else {
+                        Task { await model.setStatus(taskID: task.id, to: state) }
+                    }
                 } label: {
                     checkmarked(state, when: task.status == state)
                 }
@@ -1045,6 +1138,12 @@ struct ContentView: View {
                 if model.hotKey != .default {
                     Button("Reset to ⌥Space") { model.setHotKey(.default) }
                 }
+            }
+            // The Claude Code workspace directory (#35): its current path and a
+            // native folder chooser to change it.
+            Menu("Claude workspace") {
+                Text(model.claudeWorkspaceDirectory)
+                Button("Choose folder…") { onChooseWorkspace() }
             }
             Divider()
             // Same label and shortcut as the right-click item — two items

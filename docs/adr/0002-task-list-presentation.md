@@ -27,7 +27,10 @@ slices follow.
    monochrome — no status colour, no category colour.
 4. **One-click complete.** Each row has a checkbox/circle that sets status to
    Done in one click. The full status menu from #3 stays for the other
-   transitions (Blocked / To Do / In Progress).
+   transitions (Blocked / To Do / In Progress). Since #36 this is no longer a
+   thin `setStatus` call: `AppModel.complete` shows a green tick, holds the row
+   for a short dwell, then collapses it out (rolling back with a flash on a
+   failed write). Both the checkbox and the menu's Status -> Done route through it.
 5. **Grouped by priority with section headers.** Priority-sorted views group
    rows under **P0 / P1 / P2** headers rather than a flat list with badges.
 6. **Default view on launch is Pivotal Priorities** — open Work-category tasks,
@@ -49,4 +52,6 @@ slices follow.
   the priority colour live in the SwiftUI view layer. The filter/sort/group
   *semantics* (which tasks, in what order, under which group) live in a testable
   engine in `NotionTasksCore`, exercised through the existing seams.
-- One-click complete is a thin reuse of `AppModel.setStatus(_, to: "Done")`.
+- One-click complete began as a thin reuse of `AppModel.setStatus(_, to: "Done")`;
+  #36 replaced it with `AppModel.complete` (optimistic tick + dwell + collapse,
+  with rollback on failure), sharing the underlying status write.
