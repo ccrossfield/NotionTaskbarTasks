@@ -108,6 +108,11 @@ public final class AppModel: ObservableObject {
     /// launch (defaulting to ⌥Space) and changed via `setHotKey`; the gear menu
     /// reads it and the shell registers it.
     @Published public private(set) var hotKey: HotKey
+    /// The global show-panel shortcut (#39): toggles the main task panel from
+    /// anywhere. Restored from preferences at launch (defaulting to ⇧⌥Space) and
+    /// changed via `setPanelHotKey`; the gear menu reads it and the shell
+    /// registers it. Kept distinct from `hotKey` - the setters reject a collision.
+    @Published public private(set) var panelHotKey: HotKey
     /// Set when a task created from the quick-capture window (#34) failed to
     /// reach Notion. The window has already closed optimistically, so unlike
     /// the composer's `createError` this waits to be shown on the main panel's
@@ -207,6 +212,8 @@ public final class AppModel: ObservableObject {
             preferences?.autoRefreshInterval ?? Self.defaultAutoRefreshInterval
         // Restore the quick-capture shortcut, or fall back to ⌥Space (#34).
         self.hotKey = preferences?.hotKey ?? .default
+        // Restore the show-panel shortcut, or fall back to ⇧⌥Space (#39).
+        self.panelHotKey = preferences?.panelHotKey ?? .defaultPanel
         // Reopen the way the app was left (#9) — restored here, before any
         // fetch, so the first render is already the remembered view.
         if let config = preferences?.viewConfig {
@@ -674,8 +681,18 @@ public final class AppModel: ObservableObject {
     /// instantly, then swapped for the real task on success or rolled back on
     /// failure. The returned `CaptureOutcome` lets the shell preserve the full
     /// draft for retry when a transient failure loses the row.
+    ///
+    /// When `beginWorking` is true (the "add & work in Claude Code" path, #40),
+    /// a *successful* create is followed by flipping the created task to In
+    /// Progress via the pessimistic `setStatus` path - the same seam the row's
+    /// "Work on in Claude Code" uses. This can't happen optimistically or up
+    /// front: the provisional `temp-` row has no real page, so the status write
+    /// would 404; only once the create returns a real id can the flip run. A
+    /// failed create never reaches it, so a rolled-back row is never written to.
+    /// `capturesInFlight` still covers this follow-up write, so a poll can't
+    /// interfere. The terminal launch itself is the shell's job.
     @discardableResult
-    public func captureTask(_ draft: TaskDraft) async -> CaptureOutcome {
+    public func captureTask(_ draft: TaskDraft, beginWorking: Bool = false) async -> CaptureOutcome {
         guard let token = tokenStore.read(), !token.isEmpty else { return .notCaptured }
         var draft = draft
         draft.title = draft.trimmedTitle
@@ -717,6 +734,14 @@ public final class AppModel: ObservableObject {
             }
             state = .loaded(updated)
             persistCache(updated)
+            // #40: flip the freshly-created task to In Progress now that it has a
+            // real page. Reuses the pessimistic status write - no new optimistic
+            // path - so the row shows To Do for a beat, then In Progress once the
+            // write returns. A failed flip leaves the standard writeError; the
+            // task stays To Do. `setStatus` is a no-op on any other outcome.
+            if beginWorking {
+                await setStatus(taskID: created.id, to: "In Progress")
+            }
             return .captured
         } catch NotionClientError.unauthorized {
             // A dead token can't be retried into working; drop it and route to
@@ -815,24 +840,45 @@ public final class AppModel: ObservableObject {
         }
     }
 
-    /// Register the current quick-capture shortcut with the service (#34). Call
-    /// once at launch, after the shell has wired the service's fire action -
-    /// the mirror of `startPolling`, kept separate from `init` so the shell
-    /// controls the moment registration (and its side effects) happens.
+    /// Register both global shortcuts with the service (#34, #39). Call once at
+    /// launch, after the shell has wired the service's fire actions - the mirror
+    /// of `startPolling`, kept separate from `init` so the shell controls the
+    /// moment registration (and its side effects) happens. Each combination goes
+    /// into its own fixed slot, so they fire independently.
     public func registerHotKey() {
         hotKeyService?.register(hotKey)
+        // Never register the panel slot against the same combination as
+        // quick-capture (#39): the setters reject a collision, but a restored
+        // quick-capture combo could coincide with the ⇧⌥Space panel default
+        // (e.g. a pre-#39 user who recorded ⇧⌥Space). Skip the panel slot then,
+        // so Carbon never has two registrations firing on one press.
+        if panelHotKey != hotKey {
+            hotKeyService?.registerPanel(panelHotKey)
+        }
     }
 
     /// Change the global quick-capture shortcut (#34): validate, persist, and
     /// re-register (the service drops the old registration first). Mirrors
     /// `setAutoRefreshInterval`. An invalid combination is ignored - the
     /// recorder shouldn't offer one, and a modifier-only value must never be
-    /// persisted or registered.
+    /// persisted or registered. A combination equal to the show-panel shortcut
+    /// (#39) is ignored too: the two hotkeys must never coincide.
     public func setHotKey(_ hotKey: HotKey) {
-        guard hotKey.isValid else { return }
+        guard hotKey.isValid, hotKey != panelHotKey else { return }
         self.hotKey = hotKey
         preferences?.hotKey = hotKey
         hotKeyService?.register(hotKey)
+    }
+
+    /// Change the global show-panel shortcut (#39): the mirror of `setHotKey`,
+    /// into the second fixed slot. An invalid (modifier-only) combination is
+    /// ignored, as is one equal to the quick-capture shortcut - registering both
+    /// hotkeys against the same combination would fire ambiguously.
+    public func setPanelHotKey(_ hotKey: HotKey) {
+        guard hotKey.isValid, hotKey != self.hotKey else { return }
+        self.panelHotKey = hotKey
+        preferences?.panelHotKey = hotKey
+        hotKeyService?.registerPanel(hotKey)
     }
 
     /// Forget the stored token and return to the entry field. The cached tasks

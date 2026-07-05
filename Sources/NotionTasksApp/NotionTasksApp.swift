@@ -161,10 +161,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             .sink { [weak self] _ in self?.updateBadge() }
             .store(in: &cancellables)
 
-        // The global quick-capture hotkey (#34): wire the fire action first, so
-        // the very first press has somewhere to go, then register the persisted
-        // (or default ⌥Space) combination.
+        // The two global hotkeys (#34, #39): wire the fire actions first, so the
+        // very first press has somewhere to go, then register both persisted (or
+        // default) combinations. Show-panel reuses togglePanel's open/close and
+        // click-away semantics unchanged — the two surfaces don't interact (#34).
         hotKeyService.onFire = { [weak self] in self?.openCapture() }
+        hotKeyService.onPanelFire = { [weak self] in self?.togglePanel() }
         model.registerHotKey()
 
         // Panel key handling seen before the responder chain. Esc dismisses the
@@ -180,6 +182,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             // title field. It must take precedence over the main panel below.
             if self.capturePanel?.isKeyWindow == true {
                 if event.keyCode == 53 { self.dismissCapture(); return nil }
+                // ⌘↵ (Return keyCode 36 / keypad Enter 76, command only): file
+                // the task, flip it to In Progress, and launch Claude Code (#40).
+                // Handled here rather than via a SwiftUI .keyboardShortcut on the
+                // button, which doesn't reliably fire in a borderless
+                // non-activating KeyPanel — the same reason Esc and ⌘F are caught
+                // in this monitor. A plain Enter still falls through to the
+                // field's .onSubmit(onCommit).
+                if event.keyCode == 36 || event.keyCode == 76,
+                   event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command {
+                    self.commitCaptureAndWork()
+                    return nil
+                }
                 return event
             }
             guard let panel = self.panel, panel.isVisible, panel.isKeyWindow else { return event }
@@ -275,7 +289,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func makePanel() -> TaskPanel {
         let hosting = PanelHostingView(rootView: AnyView(
             ContentView(
-                onRecordShortcut: { [weak self] in self?.beginRecordingHotKey() },
+                onRecordShortcut: { [weak self] in self?.beginRecordingHotKey(.quickCapture) },
+                onRecordPanelShortcut: { [weak self] in self?.beginRecordingHotKey(.showPanel) },
                 onWorkInClaudeCode: { [weak self] task in self?.workInClaudeCode(on: task) },
                 onChooseWorkspace: { [weak self] in self?.chooseClaudeWorkspace() })
                 .environmentObject(model)))
@@ -387,17 +402,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     /// The hotkey fired: open the floating capture window, centred on the screen
     /// under the cursor. With no token stored there is nowhere to capture into,
-    /// so open the main panel's token-entry screen instead. If the window is
-    /// already up, just re-focus it — never a second instance — leaving the
-    /// draft untouched and the main panel exactly as it was.
+    /// so open the main panel's token-entry screen instead. Pressing the hotkey
+    /// again while the window is already up closes it (#38) — the same
+    /// dismiss-and-remember-the-draft path as Esc or a click away.
     private func openCapture() {
         if case .needsToken = model.state {
             openPanel()
             return
         }
         if let capturePanel, capturePanel.isVisible {
-            capturePanel.makeKeyAndOrderFront(nil)
-            captureModel.focusToken += 1
+            // Press-again-to-close (#38): reuse dismissCapture verbatim, so a
+            // typed-but-unsubmitted title is remembered for the next open.
+            dismissCapture()
             return
         }
         // Restore the full draft from a failed capture (#37) if there is one, so
@@ -436,6 +452,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // full draft so the next capture-window open restores it for a retry.
         Task { [weak self] in
             let outcome = await self?.model.captureTask(draft)
+            if outcome == .transientFailure { self?.lastFailedDraft = draft }
+        }
+    }
+
+    /// ⌘↵ or the capsule's terminal button (#40): file the task, flip it to In
+    /// Progress, and launch Claude Code — launch instantly, reconcile the status
+    /// in the background. The three actions can't all fire at once: the create is
+    /// optimistic (a `temp-` row, no real page yet), so only the terminal launch
+    /// is instant; the status flip rides on the create's success inside
+    /// `captureTask(beginWorking:)`.
+    private func commitCaptureAndWork() {
+        guard let capturePanel, capturePanel.isVisible, !captureIsTearingDown else { return }
+        let draft = captureModel.draft
+        guard !draft.trimmedTitle.isEmpty else { return }
+        // 1. Pre-flight iTerm2. If it isn't installed, don't lose the typed input:
+        //    file it as a plain To Do capture (no launch, no status flip) and say
+        //    why. commitCapture reads the live draft and tears the capsule down.
+        guard NSWorkspace.shared.urlForApplication(withBundleIdentifier: Self.iTermBundleID) != nil else {
+            commitCapture()
+            presentITermMissingAlert()
+            return
+        }
+        // 2. Dismiss the capsule at once — the draft was submitted, not discarded.
+        lastDiscardedTitle = nil
+        lastFailedDraft = nil
+        captureIsTearingDown = true
+        capturePanel.orderOut(nil)
+        captureIsTearingDown = false
+        // 3. Launch iTerm2 immediately with a title-only seed. The real page
+        //    doesn't exist yet, and terminal Claude Code has no Notion MCP to open
+        //    a URL anyway, so the seed carries no url (#40).
+        let seed = ClaudeCodeLaunch.seed(title: draft.trimmedTitle, url: nil)
+        let command = ClaudeCodeLaunch.shellCommand(
+            workspaceDirectory: model.claudeWorkspaceDirectory, seed: seed)
+        runAppleScript(ClaudeCodeLaunch.iTermScript(command: command))
+        // 4. Capture and flip to In Progress in the background. A transient
+        //    failure preserves the full draft for a retry (re-open, plain Enter),
+        //    exactly like commitCapture; the terminal is already open and stays.
+        Task { [weak self] in
+            let outcome = await self?.model.captureTask(draft, beginWorking: true)
             if outcome == .transientFailure { self?.lastFailedDraft = draft }
         }
     }
@@ -482,7 +538,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// chrome is drawn by `CaptureView`.
     private func makeCapturePanel() -> KeyPanel {
         let hosting = NSHostingView(rootView: AnyView(
-            CaptureView(onCommit: { [weak self] in self?.commitCapture() })
+            CaptureView(onCommit: { [weak self] in self?.commitCapture() },
+                        onCommitAndWork: { [weak self] in self?.commitCaptureAndWork() })
                 .environmentObject(model)
                 .environmentObject(captureModel)))
         let panel = makeKeyPanel(size: NSSize(width: 560, height: 120), content: hosting,
@@ -492,27 +549,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return panel
     }
 
-    // MARK: Shortcut recorder (#34)
+    // MARK: Shortcut recorder (#34, #39)
 
-    /// Show the recorder, which listens for the next key-down and re-registers
-    /// the hotkey. Already showing → just re-focus it.
-    private func beginRecordingHotKey() {
-        if let recorderPanel, recorderPanel.isVisible {
-            recorderPanel.makeKeyAndOrderFront(nil)
-            return
+    /// Which of the two hotkeys (#39) the recorder is currently recording for, so
+    /// a captured combination routes to the right setter and the panel shows the
+    /// right prompt. The recorder is a single shared surface, reused for both.
+    private enum HotKeyTarget {
+        case quickCapture, showPanel
+        /// The prompt shown while recording this shortcut.
+        var recorderPrompt: String {
+            switch self {
+            case .quickCapture: return "Press the new shortcut for quick-capture"
+            case .showPanel: return "Press the new shortcut for show panel"
+            }
         }
+    }
+    private var recordingTarget: HotKeyTarget = .quickCapture
+
+    /// Show the recorder to record a new combination for `target` (#39), which
+    /// listens for the next key-down and re-registers that hotkey. The recorder
+    /// is reused across both targets, so its prompt is refreshed on each open.
+    private func beginRecordingHotKey(_ target: HotKeyTarget) {
+        recordingTarget = target
         let panel = recorderPanel ?? makeRecorderPanel()
-        layout(panel, size: recorderHostingView?.fittingSize ?? NSSize(width: 300, height: 160),
-               verticalBias: 0.5)
+        // Refresh the prompt for the target being recorded — the panel is reused.
+        recorderHostingView?.rootView = AnyView(recorderRoot())
+        if !panel.isVisible {
+            layout(panel, size: recorderHostingView?.fittingSize ?? NSSize(width: 300, height: 160),
+                   verticalBias: 0.5)
+        }
         panel.makeKeyAndOrderFront(nil)
     }
 
-    /// A key-down reached the recorder: turn it into a `HotKey`. An invalid
-    /// press (a modifier on its own) leaves the recorder up to try again;
-    /// a valid one is registered and the recorder closes (#34).
+    /// A key-down reached the recorder: turn it into a `HotKey` and route it to
+    /// the target being recorded (#39). An invalid press (a modifier on its own)
+    /// leaves the recorder up to try again; so does a combination equal to the
+    /// *other* hotkey — the two must never coincide, so a collision is ignored
+    /// and the recorder keeps listening. A valid, non-colliding one is registered
+    /// and the recorder closes.
     private func applyRecordedShortcut(_ event: NSEvent) {
         guard let key = HotKey(recording: event) else { return }
-        model.setHotKey(key)
+        switch recordingTarget {
+        case .quickCapture:
+            if key == model.panelHotKey { return } // collides with show-panel: keep listening
+            model.setHotKey(key)
+        case .showPanel:
+            if key == model.hotKey { return } // collides with quick-capture: keep listening
+            model.setPanelHotKey(key)
+        }
         endRecording()
     }
 
@@ -523,10 +607,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         recorderIsTearingDown = false
     }
 
+    /// The recorder's SwiftUI content, carrying the prompt for the current
+    /// target. Rebuilt on each open so the prompt matches (#39).
+    private func recorderRoot() -> some View {
+        RecorderView(prompt: recordingTarget.recorderPrompt,
+                     onCapture: { [weak self] event in self?.applyRecordedShortcut(event) },
+                     onCancel: { [weak self] in self?.endRecording() })
+    }
+
     private func makeRecorderPanel() -> KeyPanel {
-        let hosting = NSHostingView(rootView: AnyView(
-            RecorderView(onCapture: { [weak self] event in self?.applyRecordedShortcut(event) },
-                         onCancel: { [weak self] in self?.endRecording() })))
+        let hosting = NSHostingView(rootView: AnyView(recorderRoot()))
         let panel = makeKeyPanel(size: NSSize(width: 300, height: 160), content: hosting,
                                  onCancel: { [weak self] in self?.endRecording() })
         self.recorderPanel = panel

@@ -27,6 +27,8 @@ public protocol PreferencesStore: AnyObject {
     var collapsedGroups: Set<String>? { get set }
     /// The global quick-capture shortcut (#34); `nil` applies the ⌥Space default.
     var hotKey: HotKey? { get set }
+    /// The global show-panel shortcut (#39); `nil` applies the ⇧⌥Space default.
+    var panelHotKey: HotKey? { get set }
     /// The Claude Code workspace directory (#35); `nil` applies the
     /// ~/Documents/workspace default.
     var claudeWorkspaceDirectory: String? { get set }
@@ -95,6 +97,22 @@ public final class UserDefaultsPreferences: PreferencesStore {
         }
     }
 
+    /// JSON-encoded like `hotKey`; a corrupt or missing value degrades to
+    /// "never set", so the model applies the ⇧⌥Space default (#39).
+    public var panelHotKey: HotKey? {
+        get {
+            guard let data = defaults.data(forKey: Keys.panelHotKey) else { return nil }
+            return try? JSONDecoder().decode(HotKey.self, from: data)
+        }
+        set {
+            if let newValue, let data = try? JSONEncoder().encode(newValue) {
+                defaults.set(data, forKey: Keys.panelHotKey)
+            } else {
+                defaults.removeObject(forKey: Keys.panelHotKey)
+            }
+        }
+    }
+
     /// A plain string; a missing value degrades to "never set", so the model
     /// applies the ~/Documents/workspace default (#35).
     public var claudeWorkspaceDirectory: String? {
@@ -113,6 +131,7 @@ public final class UserDefaultsPreferences: PreferencesStore {
         static let viewConfig = "viewConfig"
         static let collapsedGroups = "collapsedGroups"
         static let hotKey = "hotKey"
+        static let panelHotKey = "panelHotKey"
         static let claudeWorkspaceDirectory = "claudeWorkspaceDirectory"
     }
 }

@@ -26,17 +26,23 @@ struct CaptureView: View {
     /// Enter/Return: create the task and close the window. The shell reads the
     /// live `capture.draft`, so this takes no argument.
     var onCommit: () -> Void
+    /// ⌘↵ or the trailing terminal button (#40): file the task, flip it to In
+    /// Progress, and launch Claude Code. Both routes run the shell's one handler.
+    var onCommitAndWork: () -> Void = {}
 
     @FocusState private var titleFocused: Bool
     @State private var datePickerShown = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            TextField("Add a task…", text: $capture.draft.title)
-                .textFieldStyle(.plain)
-                .font(.system(size: 22, weight: .regular))
-                .focused($titleFocused)
-                .onSubmit(onCommit)
+            HStack(spacing: 12) {
+                TextField("Add a task…", text: $capture.draft.title)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 22, weight: .regular))
+                    .focused($titleFocused)
+                    .onSubmit(onCommit)
+                addAndWorkButton
+            }
             metadataLine
         }
         .padding(.horizontal, 22)
@@ -56,6 +62,27 @@ struct CaptureView: View {
     /// focus, as the composer and search fields do.
     private func focusSoon() {
         DispatchQueue.main.async { titleFocused = true }
+    }
+
+    /// The "add & work in Claude Code" button (#40): an accent-tinted terminal
+    /// glyph with a faint ⌘↵ hint, mirroring the row's `workInClaudeButton`.
+    /// Enabled only with a non-empty trimmed title, matching the ⌘↵ no-op on
+    /// empty. Both this and ⌘↵ run the shell's one handler.
+    private var addAndWorkButton: some View {
+        Button(action: onCommitAndWork) {
+            HStack(spacing: 4) {
+                Image(systemName: "terminal")
+                    .font(.system(size: 16, weight: .medium))
+                Text("⌘↵")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            .foregroundStyle(Color.accentColor)
+        }
+        .buttonStyle(.plain)
+        .disabled(capture.draft.trimmedTitle.isEmpty)
+        .help("Add & work in Claude Code")
+        .accessibilityLabel("Add & work in Claude Code")
     }
 
     /// The muted "P2 · Work · Today" line. Each value is a menu styled as plain
@@ -158,6 +185,9 @@ struct CaptureView: View {
 /// Input-Monitoring permission - the same reason the app uses Carbon for the
 /// hotkey itself.
 struct RecorderView: View {
+    /// Names which shortcut is being recorded (#39), e.g. "Press the new
+    /// shortcut for quick-capture". Defaulted so existing callers stay valid.
+    var prompt: String = "Press the new shortcut"
     var onCapture: (NSEvent) -> Void
     var onCancel: () -> Void
 
@@ -166,8 +196,9 @@ struct RecorderView: View {
             Image(systemName: "keyboard")
                 .font(.title2)
                 .foregroundStyle(.secondary)
-            Text("Press the new shortcut")
+            Text(prompt)
                 .font(.headline)
+                .multilineTextAlignment(.center)
             Text("Esc to cancel")
                 .font(.caption)
                 .foregroundStyle(.secondary)

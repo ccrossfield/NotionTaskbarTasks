@@ -66,6 +66,23 @@ func preferencesChecks(_ t: CheckRun) async {
         defaults.removePersistentDomain(forName: suiteName)
     }
 
+    await t.test("the show-panel hotkey round-trips independently of quick-capture (#39)") {
+        let defaults = try scratchDefaults()
+        let capture = HotKey(keyCode: 49, carbonModifiers: HotKey.CarbonModifier.option)
+        let panel = HotKey(keyCode: 49, carbonModifiers:
+            HotKey.CarbonModifier.shift | HotKey.CarbonModifier.option)
+
+        let prefs = UserDefaultsPreferences(defaults: defaults)
+        prefs.hotKey = capture
+        prefs.panelHotKey = panel
+
+        let reloaded = UserDefaultsPreferences(defaults: try require(UserDefaults(suiteName: suiteName)))
+        // Two distinct keys must not clobber one another.
+        t.expectEqual(reloaded.hotKey, capture)
+        t.expectEqual(reloaded.panelHotKey, panel)
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
     await t.test("the Claude workspace directory round-trips (#35)") {
         let defaults = try scratchDefaults()
 
@@ -84,6 +101,7 @@ func preferencesChecks(_ t: CheckRun) async {
         t.expect(prefs.autoRefreshInterval == nil, "nothing was ever saved")
         t.expect(prefs.collapsedGroups == nil, "nothing was ever saved")
         t.expect(prefs.hotKey == nil, "nothing was ever saved")
+        t.expect(prefs.panelHotKey == nil, "nothing was ever saved")
         t.expect(prefs.claudeWorkspaceDirectory == nil, "nothing was ever saved")
         defaults.removePersistentDomain(forName: suiteName)
     }

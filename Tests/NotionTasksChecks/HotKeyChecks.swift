@@ -15,6 +15,19 @@ func hotKeyChecks(_ t: CheckRun) async {
         t.expectEqual(key.displayString, "⌥Space")
     }
 
+    await t.test("the default show-panel shortcut is Shift+Option+Space, distinct from quick-capture (#39)") {
+        let key = HotKey.defaultPanel
+        t.expectEqual(key.keyCode, 49) // Space
+        t.expectEqual(key.carbonModifiers,
+                      HotKey.CarbonModifier.shift | HotKey.CarbonModifier.option)
+        // Rendered in the app's canonical ⌃⌥⇧⌘ order, so Option precedes Shift.
+        t.expectEqual(key.displayString, "⌥⇧Space")
+        // The two defaults must never coincide, or Carbon would register both
+        // against one combination and fire ambiguously.
+        t.expect(HotKey.defaultPanel != HotKey.default,
+                 "the two default hotkeys must differ")
+    }
+
     await t.test("modifier glyphs render in the canonical ⌃⌥⇧⌘ order, before the key") {
         let all = HotKey(keyCode: 0, carbonModifiers:
             HotKey.CarbonModifier.command | HotKey.CarbonModifier.shift

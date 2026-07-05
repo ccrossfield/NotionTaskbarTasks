@@ -64,24 +64,31 @@ final class InMemoryPreferences: PreferencesStore {
     var viewConfig: ViewConfig?
     var collapsedGroups: Set<String>?
     var hotKey: HotKey?
+    var panelHotKey: HotKey?
     var claudeWorkspaceDirectory: String?
     init(autoRefreshInterval: TimeInterval? = nil) {
         self.autoRefreshInterval = autoRefreshInterval
     }
 }
 
-/// The hotkey seam's test double (#34). The app uses `CarbonHotKeyService`;
-/// this records the last combination registered (and whether it's currently
-/// registered) so a check can assert the model drove it.
+/// The hotkey seam's test double (#34, #39). The app uses `CarbonHotKeyService`;
+/// this records the last combination registered into each of the two fixed slots
+/// (quick-capture and show-panel) so a check can assert the model drove them.
 final class FakeHotKeyService: HotKeyService {
     private(set) var registered: HotKey?
+    private(set) var registeredPanel: HotKey?
     private(set) var registerCount = 0
+    private(set) var registerPanelCount = 0
     init() {}
     func register(_ hotKey: HotKey) {
         registered = hotKey
         registerCount += 1
     }
-    func unregister() { registered = nil }
+    func registerPanel(_ hotKey: HotKey) {
+        registeredPanel = hotKey
+        registerPanelCount += 1
+    }
+    func unregister() { registered = nil; registeredPanel = nil }
 }
 
 /// The login-item seam's test double. The app uses `SMAppService` behind
@@ -2113,6 +2120,95 @@ func appModelChecks(_ t: CheckRun) async {
         t.expectEqual(service.registered, .default)
     }
 
+    t.suite("AppModel show-panel hotkey (#39)")
+
+    await t.test("the show-panel hotkey defaults to ⇧⌥Space when none is stored") {
+        t.expectEqual(hotKeyModel(preferences: InMemoryPreferences()).panelHotKey, .defaultPanel)
+    }
+
+    await t.test("a stored show-panel hotkey is restored on launch, before any registration") {
+        let prefs = InMemoryPreferences()
+        prefs.panelHotKey = HotKey(keyCode: 40, carbonModifiers:
+            HotKey.CarbonModifier.command | HotKey.CarbonModifier.control)
+        t.expectEqual(hotKeyModel(preferences: prefs).panelHotKey, prefs.panelHotKey)
+    }
+
+    await t.test("registerHotKey registers both hotkeys, each into its own slot") {
+        let service = FakeHotKeyService()
+        let model = hotKeyModel(service: service)
+
+        model.registerHotKey()
+
+        t.expectEqual(service.registered, .default)          // quick-capture slot
+        t.expectEqual(service.registeredPanel, .defaultPanel) // show-panel slot
+    }
+
+    await t.test("registerHotKey skips the panel slot when a restored combo would collide with it") {
+        // A pre-#39 user who recorded ⇧⌥Space for quick-capture: the new panel
+        // default is also ⇧⌥Space, so the two coincide. registering both would
+        // fire ambiguously, so the panel slot is skipped until the user re-picks.
+        let prefs = InMemoryPreferences()
+        prefs.hotKey = .defaultPanel // = ⇧⌥Space, same as the panel default
+        let service = FakeHotKeyService()
+        let model = hotKeyModel(preferences: prefs, service: service)
+        t.expectEqual(model.hotKey, .defaultPanel)
+        t.expectEqual(model.panelHotKey, .defaultPanel) // defaulted, collides
+
+        model.registerHotKey()
+
+        t.expectEqual(service.registered, .defaultPanel)   // quick-capture still registers
+        t.expect(service.registeredPanel == nil, "the colliding panel slot must be skipped")
+    }
+
+    await t.test("setPanelHotKey persists the new shortcut and registers it into the panel slot") {
+        let prefs = InMemoryPreferences()
+        let service = FakeHotKeyService()
+        let model = hotKeyModel(preferences: prefs, service: service)
+        let newKey = HotKey(keyCode: 40, carbonModifiers:
+            HotKey.CarbonModifier.command | HotKey.CarbonModifier.control)
+
+        model.setPanelHotKey(newKey)
+
+        t.expectEqual(model.panelHotKey, newKey)
+        t.expectEqual(prefs.panelHotKey, newKey)          // persisted for the next launch
+        t.expectEqual(service.registeredPanel, newKey)    // re-registered live, into the panel slot
+        t.expect(service.registered == nil, "the quick-capture slot must be left alone")
+    }
+
+    await t.test("setPanelHotKey ignores a modifier-only combination") {
+        let prefs = InMemoryPreferences()
+        let service = FakeHotKeyService()
+        let model = hotKeyModel(preferences: prefs, service: service)
+        let invalid = HotKey(keyCode: 56, carbonModifiers: HotKey.CarbonModifier.shift) // Shift alone
+
+        model.setPanelHotKey(invalid)
+
+        t.expectEqual(model.panelHotKey, .defaultPanel) // unchanged
+        t.expect(prefs.panelHotKey == nil, "an invalid shortcut must not be persisted")
+        t.expect(service.registeredPanel == nil, "an invalid shortcut must not be registered")
+    }
+
+    await t.test("the two hotkeys can never be set identical - each setter rejects the other's combo") {
+        let prefs = InMemoryPreferences()
+        let service = FakeHotKeyService()
+        let model = hotKeyModel(preferences: prefs, service: service)
+
+        // setPanelHotKey ignores a combo equal to the quick-capture hotkey (⌥Space).
+        model.setPanelHotKey(.default)
+        t.expectEqual(model.panelHotKey, .defaultPanel) // unchanged - collision rejected
+        t.expect(service.registeredPanel == nil, "a colliding panel shortcut must not register")
+
+        // setHotKey ignores a combo equal to the show-panel hotkey (⇧⌥Space).
+        model.setHotKey(.defaultPanel)
+        t.expectEqual(model.hotKey, .default) // unchanged - collision rejected
+        t.expect(service.registered == nil, "a colliding quick-capture shortcut must not register")
+
+        // A genuinely distinct combo is still accepted for each.
+        let cmdK = HotKey(keyCode: 40, carbonModifiers: HotKey.CarbonModifier.command)
+        model.setPanelHotKey(cmdK)
+        t.expectEqual(model.panelHotKey, cmdK)
+    }
+
     t.suite("AppModel quick-capture create (#34)")
 
     await t.test("capturing a task creates it, shows the new row, and leaves the composer untouched") {
@@ -2413,6 +2509,69 @@ func appModelChecks(_ t: CheckRun) async {
             $0.httpMethod == "POST" && $0.url?.absoluteString.hasSuffix("/pages") == true
         }, "the task must still be created even with no list on screen")
         if case .loaded = model.state { t.expect(false, "capturing without a load must not fabricate a loaded state") }
+    }
+
+    t.suite("AppModel quick-capture & work in Claude Code (#40)")
+
+    func patchCount(_ stub: RoutingStubHTTPClient) -> Int {
+        stub.requests.filter { $0.httpMethod == "PATCH" }.count
+    }
+
+    await t.test("captureTask(beginWorking: true) files the task and flips the created row To Do → In Progress") {
+        let stub = try routingStub()
+        stub.create = createdPageJSON(id: "cap-work", title: "Ship the release",
+                                      status: "To Do", category: "👨🏻‍💻 Work")
+        let model = await loadedModel(stub: stub)
+
+        let outcome = await model.captureTask(
+            TaskDraft(title: "Ship the release", category: "👨🏻‍💻 Work"), beginWorking: true)
+
+        t.expectEqual(outcome, .captured)
+        guard case .loaded(let tasks) = model.state else {
+            t.expect(false, "expected .loaded, got \(model.state)"); return
+        }
+        let created = try require(tasks.first { $0.id == "cap-work" })
+        t.expect(created.status == "In Progress",
+                 "the captured row should flip to In Progress, was \(created.status ?? "nil")")
+        // The In Progress flip goes through the pessimistic status PATCH.
+        t.expect(stub.requests.contains {
+            $0.httpMethod == "PATCH" && $0.url?.absoluteString.hasSuffix("/pages/cap-work") == true
+        }, "beginWorking must PATCH the created page to In Progress")
+        t.expect(model.captureError == nil, "a successful capture leaves no error")
+    }
+
+    await t.test("captureTask(beginWorking: true) attempts no status write when the create fails") {
+        let stub = try routingStub()
+        stub.createStatusCode = 500 // the create fails before any status flip
+        let model = await loadedModel(stub: stub)
+        guard case .loaded(let before) = model.state else {
+            t.expect(false, "expected .loaded, got \(model.state)"); return
+        }
+
+        let outcome = await model.captureTask(TaskDraft(title: "Doomed"), beginWorking: true)
+
+        t.expectEqual(outcome, .transientFailure)
+        t.expectEqual(patchCount(stub), 0) // no In Progress write on a rolled-back provisional row
+        t.expect(model.captureError != nil, "the create failure still surfaces for the next panel open")
+        guard case .loaded(let after) = model.state else {
+            t.expect(false, "expected .loaded, got \(model.state)"); return
+        }
+        t.expectEqual(after.map(\.id), before.map(\.id)) // the provisional row was rolled back
+    }
+
+    await t.test("a plain capture (beginWorking defaulted false) never PATCHes a status") {
+        let stub = try routingStub()
+        stub.create = createdPageJSON(id: "cap-plain", title: "Just file it", category: "👨🏻‍💻 Work")
+        let model = await loadedModel(stub: stub)
+
+        await model.captureTask(TaskDraft(title: "Just file it", category: "👨🏻‍💻 Work"))
+
+        t.expectEqual(patchCount(stub), 0) // plain Enter files as To Do, no status change
+        guard case .loaded(let tasks) = model.state else {
+            t.expect(false, "expected .loaded, got \(model.state)"); return
+        }
+        t.expect(tasks.first { $0.id == "cap-plain" }?.status == "To Do",
+                 "a plain capture stays at the DB-default To Do")
     }
 
     t.suite("AppModel completion tick (#36)")

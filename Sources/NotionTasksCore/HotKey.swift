@@ -33,6 +33,12 @@ public struct HotKey: Codable, Equatable {
     /// rarely clashes with app shortcuts.
     public static let `default` = HotKey(keyCode: 49, carbonModifiers: CarbonModifier.option)
 
+    /// The default show-panel combination: ⇧⌥Space (#39). Deliberately one
+    /// modifier away from `default` (⌥Space) so the two never coincide - Carbon
+    /// would register both against one combination and fire ambiguously.
+    public static let defaultPanel = HotKey(keyCode: 49,
+        carbonModifiers: CarbonModifier.shift | CarbonModifier.option)
+
     /// Whether this is a usable global shortcut: it must fire on a real,
     /// non-modifier key. A capture of modifier keys alone (e.g. just ⌥) is
     /// rejected - registering it is meaningless, so the recorder asks again.

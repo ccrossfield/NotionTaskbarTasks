@@ -8,18 +8,30 @@ import NotionTasksCore
 /// registered combination and needs **no** Input-Monitoring / Accessibility
 /// permission prompt, and it works for an `.accessory` app with no Dock icon.
 ///
-/// The shell sets `onFire` once; every re-registration then needs only the new
-/// `HotKey`. Fires `onFire` on the main thread.
+/// The shell sets `onFire`/`onPanelFire` once; every re-registration then needs
+/// only the new `HotKey`. Fires the actions on the main thread.
+///
+/// Two fixed slots (#39): the quick-capture combination (id 1, `onFire`) and the
+/// show-panel combination (id 2, `onPanelFire`). Both share the one signature and
+/// installed handler, which dispatches on the pressed id - deliberately two named
+/// slots, not a generic registry, since there are only ever these two purposes.
 final class CarbonHotKeyService: HotKeyService {
-    /// What to do when the combination is pressed. Set once by the shell.
+    /// What to do when the quick-capture combination is pressed (#34). Set once
+    /// by the shell.
     var onFire: (() -> Void)?
+    /// What to do when the show-panel combination is pressed (#39). Set once by
+    /// the shell.
+    var onPanelFire: (() -> Void)?
 
     private var hotKeyRef: EventHotKeyRef?
+    private var panelHotKeyRef: EventHotKeyRef?
     private var eventHandler: EventHandlerRef?
-    // A four-char signature ('NTKY') and id identify our one hotkey in the
-    // Carbon event, so the handler ignores hotkeys any other code registered.
+    // A four-char signature ('NTKY') plus a per-purpose id identify each of our
+    // two hotkeys in the Carbon event, so the handler ignores hotkeys any other
+    // code registered and can tell our own two apart.
     private let signature: OSType = 0x4E544B59
-    private let hotKeyID: UInt32 = 1
+    private let hotKeyID: UInt32 = 1       // quick-capture
+    private let panelHotKeyID: UInt32 = 2  // show-panel
 
     init() {
         installHandler()
@@ -32,7 +44,8 @@ final class CarbonHotKeyService: HotKeyService {
 
     /// Install the process-wide handler for hotkey-pressed events once. The
     /// callback is a bare C function (it captures nothing); `self` reaches it
-    /// through the opaque `userData` pointer.
+    /// through the opaque `userData` pointer. It routes to the right action by
+    /// the pressed id.
     private func installHandler() {
         var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
                                  eventKind: UInt32(kEventHotKeyPressed))
@@ -44,26 +57,47 @@ final class CarbonHotKeyService: HotKeyService {
             GetEventParameter(event, EventParamName(kEventParamDirectObject),
                               EventParamType(typeEventHotKeyID), nil,
                               MemoryLayout<EventHotKeyID>.size, nil, &pressedID)
-            if pressedID.signature == service.signature, pressedID.id == service.hotKeyID {
+            guard pressedID.signature == service.signature else { return noErr }
+            if pressedID.id == service.hotKeyID {
                 DispatchQueue.main.async { service.onFire?() }
+            } else if pressedID.id == service.panelHotKeyID {
+                DispatchQueue.main.async { service.onPanelFire?() }
             }
             return noErr
         }, 1, &spec, context, &eventHandler)
     }
 
-    /// Register `hotKey`, replacing any previous registration.
+    /// Register `hotKey` as the quick-capture shortcut, replacing only that slot.
     func register(_ hotKey: HotKey) {
-        unregister()
-        let id = EventHotKeyID(signature: signature, id: hotKeyID)
-        RegisterEventHotKey(hotKey.keyCode, hotKey.carbonModifiers, id,
-                            GetApplicationEventTarget(), 0, &hotKeyRef)
+        registerSlot(hotKey, id: hotKeyID, into: &hotKeyRef)
     }
 
+    /// Register `hotKey` as the show-panel shortcut (#39), replacing only that
+    /// slot and leaving the quick-capture registration intact.
+    func registerPanel(_ hotKey: HotKey) {
+        registerSlot(hotKey, id: panelHotKeyID, into: &panelHotKeyRef)
+    }
+
+    /// Remove both registrations, if any.
     func unregister() {
-        if let hotKeyRef {
-            UnregisterEventHotKey(hotKeyRef)
-            self.hotKeyRef = nil
-        }
+        unregisterSlot(&hotKeyRef)
+        unregisterSlot(&panelHotKeyRef)
+    }
+
+    /// Replace one slot's registration: drop the old ref (if any), then register
+    /// `hotKey` under `slotID` and store the new ref. Shared by both public
+    /// register methods so the Carbon dance lives in one place - still two named
+    /// slots, not a generic registry (#39).
+    private func registerSlot(_ hotKey: HotKey, id slotID: UInt32, into ref: inout EventHotKeyRef?) {
+        unregisterSlot(&ref)
+        let id = EventHotKeyID(signature: signature, id: slotID)
+        RegisterEventHotKey(hotKey.keyCode, hotKey.carbonModifiers, id,
+                            GetApplicationEventTarget(), 0, &ref)
+    }
+
+    private func unregisterSlot(_ ref: inout EventHotKeyRef?) {
+        if let ref { UnregisterEventHotKey(ref) }
+        ref = nil
     }
 }
 

@@ -5,6 +5,8 @@ struct ContentView: View {
     /// Opens the shell's quick-capture shortcut recorder (#34). The gear menu
     /// triggers it; recording lives in the shell (AppKit), not the view.
     var onRecordShortcut: () -> Void = {}
+    /// Opens the shell's show-panel shortcut recorder (#39), the second hotkey.
+    var onRecordPanelShortcut: () -> Void = {}
     /// Launches iTerm2 + `claude` for a task (#35). The shell owns the
     /// AppleScript launch and the iTerm2-missing alert; the view just invokes it.
     var onWorkInClaudeCode: (NotionTask) -> Void = { _ in }
@@ -1137,6 +1139,17 @@ struct ContentView: View {
                 Button("Record new shortcut…") { onRecordShortcut() }
                 if model.hotKey != .default {
                     Button("Reset to ⌥Space") { model.setHotKey(.default) }
+                }
+            }
+            // The global show-panel shortcut (#39): symmetric with quick-capture
+            // above — current combination, record a new one, reset to the default.
+            Menu("Show panel shortcut") {
+                Text("Current: \(model.panelHotKey.displayString)")
+                Button("Record new shortcut…") { onRecordPanelShortcut() }
+                if model.panelHotKey != .defaultPanel {
+                    Button("Reset to \(HotKey.defaultPanel.displayString)") {
+                        model.setPanelHotKey(.defaultPanel)
+                    }
                 }
             }
             // The Claude Code workspace directory (#35): its current path and a
