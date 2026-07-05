@@ -1900,6 +1900,125 @@ func appModelChecks(_ t: CheckRun) async {
         t.expect(!model.isSearching && model.searchText.isEmpty, "toggling again closes and clears search")
     }
 
+    t.suite("AppModel type-ahead search (#41)")
+
+    await t.test("typeAheadCharacter keeps typing keys and seeds with the first character") {
+        t.expectEqual(AppModel.typeAheadCharacter(from: "m"), "m")
+        t.expectEqual(AppModel.typeAheadCharacter(from: "M"), "M")   // shift-held capital
+        t.expectEqual(AppModel.typeAheadCharacter(from: "7"), "7")
+        t.expectEqual(AppModel.typeAheadCharacter(from: " "), " ")   // space is typing
+        t.expectEqual(AppModel.typeAheadCharacter(from: "?"), "?")   // punctuation
+        t.expectEqual(AppModel.typeAheadCharacter(from: "é"), "é")   // option-accented input
+    }
+
+    await t.test("typeAheadCharacter rejects control, navigation and empty keys") {
+        t.expectEqual(AppModel.typeAheadCharacter(from: "\r"), nil)       // Return
+        t.expectEqual(AppModel.typeAheadCharacter(from: "\t"), nil)       // Tab
+        t.expectEqual(AppModel.typeAheadCharacter(from: "\u{1B}"), nil)   // Esc
+        t.expectEqual(AppModel.typeAheadCharacter(from: "\u{7F}"), nil)   // Delete
+        // AppKit arrows / F-keys live in the private-use function-key block.
+        t.expectEqual(AppModel.typeAheadCharacter(from: String(UnicodeScalar(0xF700)!)), nil) // ↑
+        t.expectEqual(AppModel.typeAheadCharacter(from: String(UnicodeScalar(0xF703)!)), nil) // →
+        t.expectEqual(AppModel.typeAheadCharacter(from: ""), nil)        // dead key mid-compose
+        t.expectEqual(AppModel.typeAheadCharacter(from: nil), nil)
+    }
+
+    await t.test("a plain key in the idle panel opens search seeded with that character") {
+        let model = try await searchModel()
+        t.expect(!model.isSearching, "search starts closed")
+
+        let consumed = model.beginTypeAheadSearch(characters: "p", commandDown: false, controlDown: false)
+        t.expect(consumed, "the key is consumed on a hit")
+        t.expect(model.isSearching, "search opens")
+        t.expectEqual(model.searchText, "p")
+    }
+
+    await t.test("shift and option keys still trigger type-ahead") {
+        let capital = try await searchModel()
+        t.expect(capital.beginTypeAheadSearch(characters: "É", commandDown: false, controlDown: false),
+                 "a shift/option character opens search")
+        t.expectEqual(capital.searchText, "É")
+    }
+
+    await t.test("Command or Control held is left for shortcut handlers") {
+        let cmd = try await searchModel()
+        t.expect(!cmd.beginTypeAheadSearch(characters: "f", commandDown: true, controlDown: false),
+                 "⌘F is not type-ahead")
+        t.expect(!cmd.isSearching, "search stays closed")
+
+        let ctrl = try await searchModel()
+        t.expect(!ctrl.beginTypeAheadSearch(characters: "a", commandDown: false, controlDown: true),
+                 "⌃A is not type-ahead")
+        t.expect(!ctrl.isSearching, "search stays closed")
+    }
+
+    await t.test("a non-typing key in the idle panel is left alone") {
+        let model = try await searchModel()
+        t.expect(!model.beginTypeAheadSearch(characters: "\r", commandDown: false, controlDown: false),
+                 "Return is not consumed")
+        t.expect(!model.isSearching, "search stays closed")
+    }
+
+    await t.test("a focused text field owns its own typing") {
+        // Inline rename open: the rename field, not search, receives the key.
+        let renaming = try await searchModel()
+        renaming.beginEditing(taskID: firstTaskID, title: "Wire up the menu bar read path")
+        t.expect(!renaming.beginTypeAheadSearch(characters: "x", commandDown: false, controlDown: false),
+                 "rename absorbs the key")
+        t.expect(!renaming.isSearching, "search does not open over a rename")
+        t.expectEqual(renaming.editingDraft, "Wire up the menu bar read path")
+
+        // Composer open: its title field receives the key.
+        let composing = try await searchModel()
+        composing.openComposer()
+        t.expect(!composing.beginTypeAheadSearch(characters: "x", commandDown: false, controlDown: false),
+                 "composer absorbs the key")
+        t.expect(!composing.isSearching, "search does not open over the composer")
+
+        // Search already open: the key flows to the focused search field, so
+        // the monitor must not consume it (which would drop it) or reseed.
+        let searching = try await searchModel()
+        searching.openSearch()
+        searching.setSearch("wi")
+        t.expect(!searching.beginTypeAheadSearch(characters: "r", commandDown: false, controlDown: false),
+                 "an open search does not re-trigger")
+        t.expectEqual(searching.searchText, "wi") // untouched — the field appends 'r' itself
+    }
+
+    t.suite("AppModel sole search result (#42)")
+
+    await t.test("soleVisibleTask returns the one match, else nil") {
+        let model = try await searchModel()
+        // Default Pivotal Priorities shows two tasks (P0 + P1) — not sole.
+        t.expect(model.soleVisibleTask(today: searchToday, calendar: searchCal) == nil,
+                 "two visible tasks is not a sole result")
+
+        // Narrow to exactly one.
+        model.setSearch("wire")
+        t.expectEqual(model.soleVisibleTask(today: searchToday, calendar: searchCal)?.title,
+                      "Wire up the menu bar read path")
+    }
+
+    await t.test("soleVisibleTask is nil when the filter matches nothing") {
+        let model = try await searchModel()
+        model.setSearch("zzzznomatch")
+        t.expect(model.soleVisibleTask(today: searchToday, calendar: searchCal) == nil,
+                 "no match is not a sole result")
+
+        // A match hidden by the active preset also counts as zero visible.
+        model.setSearch("chase") // personal task, hidden by Pivotal (Work only)
+        t.expect(model.soleVisibleTask(today: searchToday, calendar: searchCal) == nil,
+                 "a match filtered out by the preset is not visible")
+    }
+
+    await t.test("soleVisibleTask sees a match that a preset switch reveals") {
+        let model = try await searchModel()
+        model.setSearch("chase")
+        model.selectPreset(.allOpen) // now the personal task is in view — and it's the only match
+        t.expectEqual(model.soleVisibleTask(today: searchToday, calendar: searchCal)?.title,
+                      "Chase vendor on renewal quote")
+    }
+
     t.suite("AppModel reschedule & re-prioritise (#33)")
 
     // firstTaskID in the fixture: P1, due 2026-06-28, Work, In Progress.

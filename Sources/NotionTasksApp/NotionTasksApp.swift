@@ -133,6 +133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        installEditMenu()
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
@@ -207,6 +208,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 if !self.handleCancel() { panel.close() }
                 return nil
             }
+            // ⌘↵ (Return 36 / keypad Enter 76, command only) while searching:
+            // work on the sole result in Claude Code (#44), the keyboard twin of
+            // the row's terminal button — mirroring the capture window's ⌘↵
+            // (#40). Plain Enter opens it in Notion via the field's .onSubmit
+            // (#42); the ⌘ modifier suppresses .onSubmit, so this must be caught
+            // here rather than in SwiftUI. Consumed whenever searching so a
+            // 0-or-many-results ⌘↵ doesn't fall through to a beep.
+            if event.keyCode == 36 || event.keyCode == 76,
+               event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+               self.model.isSearching {
+                if let task = self.model.soleVisibleTask() { self.workInClaudeCode(on: task) }
+                return nil
+            }
+            // Type-ahead (#41): a plain printable key with nothing focused opens
+            // the search row and seeds it with that character. The model owns
+            // the precedence (no field focused, no ⌘/⌃) and swallows the key on
+            // a hit so it isn't double-inserted once the field takes focus.
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            if self.model.beginTypeAheadSearch(characters: event.characters,
+                                               commandDown: flags.contains(.command),
+                                               controlDown: flags.contains(.control)) {
+                return nil
+            }
             return event
         }
     }
@@ -259,6 +283,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem.menu = menu
         statusItem.button?.performClick(nil)
         statusItem.menu = nil
+    }
+
+    /// Give the app a standard Edit menu (#43). A manual AppKit lifecycle ships
+    /// no main menu, so none of the standard editing key equivalents fire —
+    /// ⌘A/⌘C/⌘V/⌘X/⌘Z were all dead in every text field, including paste in
+    /// quick-capture. As an `.accessory` app this menu never shows in the system
+    /// menu bar; only its key equivalents go live, matched against `mainMenu`
+    /// whenever a panel is key and a field is first responder. Edit-only on
+    /// purpose: no App/Quit submenu, so ⌘Q-to-quit isn't introduced by the back
+    /// door (Quit stays the gear menu's job, #20).
+    private func installEditMenu() {
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+
+        let editItem = NSMenuItem()
+        editItem.submenu = editMenu
+        let mainMenu = NSMenu()
+        mainMenu.addItem(editItem)
+        NSApp.mainMenu = mainMenu
     }
 
     private func togglePanel() {

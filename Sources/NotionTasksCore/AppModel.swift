@@ -581,6 +581,47 @@ public final class AppModel: ObservableObject {
     /// filter lives in the model and `groups()` reflows on every change.
     public func setSearch(_ text: String) { searchText = text }
 
+    /// The first character of `characters` if it reads as *typing* (#41) — a
+    /// letter, digit, space, or punctuation — rather than a control or
+    /// navigation key. `NSEvent.characters` gives control keys their literal
+    /// scalars (Return `\r`, Tab `\t`, Esc `\u{1B}`, Backspace/Delete
+    /// `\u{7F}`) and maps arrows / F-keys / Home / End into AppKit's private-use
+    /// function-key block, so both ranges are filtered out. Returns `nil` when
+    /// the key isn't type-ahead input (including an empty string, e.g. a dead
+    /// key mid-compose). Pure and static so the key filter is unit-testable
+    /// without an `NSEvent`.
+    public static func typeAheadCharacter(from characters: String?) -> String? {
+        guard let characters, let scalar = characters.unicodeScalars.first else { return nil }
+        // C0 controls and DEL: Return, Tab, Esc, Backspace/Delete, etc.
+        if scalar.value < 0x20 || scalar.value == 0x7F { return nil }
+        // AppKit's function-key private-use area: arrows, F-keys, Home/End/PageUp…
+        if (0xF700...0xF8FF).contains(scalar.value) { return nil }
+        // Seed with the whole first grapheme so multi-scalar characters survive.
+        guard let first = characters.first else { return nil }
+        return String(first)
+    }
+
+    /// A plain keystroke in the open, focused panel opens the search row and
+    /// seeds it with that character (#41) — Spotlight-style type-ahead. Returns
+    /// `true` when the key was consumed, so the shell's key monitor can swallow
+    /// it (the now-focused field takes over from the next keystroke on).
+    ///
+    /// Suppressed when a text field already owns the keyboard — an inline rename
+    /// (#28), the composer (#22), or an already-open search (#32) — and when
+    /// Command or Control is held, so shortcuts like ⌘F still reach their own
+    /// handlers. Shift and Option stay allowed: capitals, symbols, and
+    /// Option-accented input all type through.
+    public func beginTypeAheadSearch(characters: String?,
+                                     commandDown: Bool,
+                                     controlDown: Bool) -> Bool {
+        guard editingTaskID == nil, !isComposing, !isSearching else { return false }
+        guard !commandDown, !controlDown else { return false }
+        guard let seed = Self.typeAheadCharacter(from: characters) else { return false }
+        openSearch()
+        searchText = seed
+        return true
+    }
+
     /// Open the quick-add composer (#22). Messages from the previous
     /// composition die here — they belong to a draft that no longer exists.
     /// Collapses the search row if it was open (#32): the two are mutually
@@ -983,6 +1024,16 @@ public final class AppModel: ObservableObject {
             for: preset, searched, openStatuses: openStatuses, workCategory: workCategory,
             personalCategories: personalCategories, priorityOrder: schemaOptions.priorities,
             today: today, calendar: calendar)
+    }
+
+    /// The single task visible under the current filters (#42), or nil when zero
+    /// or more than one match. Pressing Enter in the search field opens it — a
+    /// keyboard shortcut for "I've narrowed to the one I want, take me there".
+    /// Reads the same `groups()` the panel renders, so "one result" means one
+    /// row on screen, whatever the preset or query.
+    public func soleVisibleTask(today: Date = Date(), calendar: Calendar = .current) -> NotionTask? {
+        let tasks = groups(today: today, calendar: calendar).flatMap(\.tasks)
+        return tasks.count == 1 ? tasks.first : nil
     }
 
     /// Show a snapshot: the tasks AND the schema facts they were filtered with,

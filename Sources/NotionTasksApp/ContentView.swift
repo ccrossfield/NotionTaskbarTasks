@@ -264,10 +264,34 @@ struct ContentView: View {
                     set: { model.setSearch($0) }))
                     .textFieldStyle(.plain)
                     .focused($searchFocused)
+                    // Enter opens the result when the search has narrowed to
+                    // exactly one (#42), same as clicking its title. Opening
+                    // Notion steals key focus, so the panel closes and the
+                    // search clears on its own — no explicit teardown here.
+                    .onSubmit {
+                        if let task = model.soleVisibleTask() { openInNotion(task) }
+                    }
                     .onAppear {
                         // Deferred a tick so the field is in the hierarchy
                         // before it takes key focus (as the composer does).
                         DispatchQueue.main.async { searchFocused = true }
+                    }
+                    .onChange(of: searchFocused) { _, focused in
+                        // Type-ahead (#41): once focus has actually landed —
+                        // and AppKit's field editor has done its focus
+                        // select-all — drop the caret past any seed text so the
+                        // next keystroke extends it rather than replacing it.
+                        // Anchored to the focus-commit (not a blind async hop
+                        // off the state-set) so it can't lose the race with the
+                        // select-all. Harmless (caret at 0) when search opened
+                        // empty via ⌘F or the icon.
+                        guard focused else { return }
+                        DispatchQueue.main.async {
+                            if let editor = NSApp.keyWindow?.firstResponder as? NSText {
+                                let end = (editor.string as NSString).length
+                                editor.selectedRange = NSRange(location: end, length: 0)
+                            }
+                        }
                     }
                 if !model.searchText.isEmpty {
                     Button {
