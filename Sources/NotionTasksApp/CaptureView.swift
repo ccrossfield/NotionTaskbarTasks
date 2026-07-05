@@ -90,7 +90,8 @@ struct CaptureView: View {
     private var metadataLine: some View {
         HStack(spacing: 6) {
             valueMenu(current: capture.draft.priority, placeholder: "Priority",
-                      options: model.schemaOptions.priorities) { capture.draft.priority = $0 }
+                      options: model.schemaOptions.priorities,
+                      hint: PriorityShortcut.hint(forLabel:)) { capture.draft.priority = $0 }
             separator
             valueMenu(current: capture.draft.category, placeholder: "Category",
                       options: model.schemaOptions.categories) { capture.draft.category = $0 }
@@ -107,17 +108,23 @@ struct CaptureView: View {
 
     /// A single-select value menu (Priority / Category): the schema options plus
     /// None, checkmarking the current choice. Rendered as quiet plain text.
+    /// `hint` appends an accelerator label to matching rows (e.g. Priority's
+    /// "P1  ⌘1", #45) — drawn as plain text in the title, not a live
+    /// `.keyboardShortcut`; the shell's key monitor owns the actual keys, for
+    /// the borderless-panel reason the ⌘↵ hint is manual too.
     private func valueMenu(current: String?, placeholder: String, options: [String],
+                           hint: @escaping (String) -> String? = { _ in nil },
                            set: @escaping (String?) -> Void) -> some View {
         Menu {
             Button("None") { set(nil) }
             Divider()
             ForEach(options, id: \.self) { option in
+                let title = hint(option).map { "\(option)  \($0)" } ?? option
                 Button {
                     set(option)
                 } label: {
-                    if current == option { Label(option, systemImage: "checkmark") }
-                    else { Text(option) }
+                    if current == option { Label(title, systemImage: "checkmark") }
+                    else { Text(title) }
                 }
             }
         } label: {

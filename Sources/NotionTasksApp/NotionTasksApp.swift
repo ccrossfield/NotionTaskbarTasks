@@ -195,6 +195,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     self.commitCaptureAndWork()
                     return nil
                 }
+                // ⌘0/⌘1/⌘2 (command only): set the draft's Priority to P0/P1/P2,
+                // toggling it off if that priority is already held (#45). Both
+                // the main-row and keypad digits fire, matching the ⌘↵ handler
+                // above. Swallowed whenever the digit is recognised — even when
+                // the label isn't in the schema (a clean no-op, no beep) — so a
+                // ⌘-digit never leaks a stray character into the title field.
+                if let digit = Self.captureDigit(forKeyCode: event.keyCode),
+                   event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command {
+                    self.captureModel.draft.priority = PriorityShortcut.nextPriority(
+                        current: self.captureModel.draft.priority,
+                        digit: digit,
+                        available: self.model.schemaOptions.priorities)
+                    return nil
+                }
                 return event
             }
             guard let panel = self.panel, panel.isVisible, panel.isKeyWindow else { return event }
@@ -449,6 +463,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     // MARK: Quick-capture window (#34)
+
+    /// The Priority digit (0/1/2) a keyDown maps to for the ⌘0/⌘1/⌘2
+    /// accelerators (#45), or nil for any other key. Covers both the main number
+    /// row and the numeric keypad, mirroring the ⌘↵ handler's Return-and-keypad
+    /// pair. Virtual keyCodes are fixed by the hardware, not the layout.
+    private static func captureDigit(forKeyCode keyCode: UInt16) -> Int? {
+        switch keyCode {
+        case 29, 82: return 0 // main-row 0, keypad 0
+        case 18, 83: return 1 // main-row 1, keypad 1
+        case 19, 84: return 2 // main-row 2, keypad 2
+        default: return nil
+        }
+    }
 
     /// The hotkey fired: open the floating capture window, centred on the screen
     /// under the cursor. With no token stored there is nowhere to capture into,
