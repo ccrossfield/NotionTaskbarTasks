@@ -25,8 +25,8 @@ tasks that are late or due today. Click it to drop the task panel:
   <tr>
     <td colspan="2" align="center">
       <img src="docs/images/quick-capture.png" width="480"
-           alt="The quick-capture window: a Spotlight-style floating capsule centred on screen over the desktop, with a large task title ('Chase the signed term sheet') above a single muted line reading 'P0 · Work · Today' where each value is clickable and the due date 'Today' carries its urgency tint; the menu-bar icon above is unhighlighted, the panel closed">
-      <br><b>Quick-capture</b> — press <kbd>⌥Space</kbd> from any app to drop a Spotlight-style capsule and add a task without opening the panel; Enter files it and the window vanishes. The shortcut is configurable from the gear menu.
+           alt="The quick-capture window: a Spotlight-style floating capsule centred on screen over the desktop, with a large task title ('Chase the signed term sheet') and, at the right of the title row, an accent-coloured terminal button with a muted ⌘↵ hint; beneath the title a single muted line reads 'P0 · Work · Today' where each value is clickable and the due date 'Today' carries its urgency tint; the menu-bar icon above is unhighlighted, the panel closed">
+      <br><b>Quick-capture</b> — press <kbd>⌥Space</kbd> from any app to drop a Spotlight-style capsule and add a task without opening the panel; Enter files it and the window vanishes. Press <kbd>⌘↵</kbd> (or the terminal button) instead to file it, set it In&nbsp;Progress and open it straight away in Claude&nbsp;Code. The shortcut is configurable from the gear menu.
     </td>
   </tr>
   <tr>

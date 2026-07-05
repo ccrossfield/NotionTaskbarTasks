@@ -132,6 +132,14 @@
   .cmeta b { color:var(--l-title); font-weight:400; }
   .cmeta .today { color:var(--l-today); }
   .cmeta .sep { opacity:.55; margin:0 4px; }
+  /* #40: the capsule's title row carries a trailing "work in Claude Code"
+     control - an accent terminal glyph with a muted ⌘↵ hint, right-aligned,
+     mirroring the row's workInClaudeButton and the claude-code scene's icon */
+  .ctitle-row { display:flex; align-items:center; gap:22px; }
+  .ctitle-row .ctitle { flex:1; min-width:0; }
+  .cwork { flex:0 0 auto; display:flex; align-items:center; gap:7px; color:var(--accent); }
+  .cwork .ckbd { font-size:23px; font-weight:500; }
+  .scene.light .cwork .ckbd { color:var(--l-secondary); }
 
   /* single-scene capture: strip gallery chrome, size body to the scene */
   body.single { padding:0; }
@@ -316,7 +324,13 @@
   </div>
 
   <div class="capsule">
-    <div class="ctitle">Chase the signed term sheet</div>
+    <div class="ctitle-row">
+      <div class="ctitle">Chase the signed term sheet</div>
+      <span class="cwork">
+        <svg width="40" height="40" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"><rect x="1.3" y="2.7" width="13.4" height="10.6" rx="2.4"/><path d="M4.2 6 6.6 8 4.2 10"/><path d="M7.6 10.2H11"/></svg>
+        <span class="ckbd">⌘↵</span>
+      </span>
+    </div>
     <div class="cmeta">P0 <span class="sep">·</span> <b>Work</b> <span class="sep">·</span> <span class="today">Today</span></div>
   </div>
 </div>
