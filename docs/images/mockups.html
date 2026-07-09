@@ -168,6 +168,26 @@
   .term-win .tbody .cur { display:inline-block; width:11px; height:21px; background:#d4d4d8; vertical-align:-4px; margin-left:2px; }
   .term-win .tbody .ln { display:block; }
   .term-win .tbody .gap { height:14px; }
+
+  /* reschedule (#46): the due-date text is a click target. A faint "+ date"
+     marks undated rows; a subtle pill marks the clicked date; clicking opens a
+     graphical calendar anchored right at the date. */
+  .light .nodate { color:#b7b7bc; } .dark .nodate { color:rgba(255,255,255,.34); }
+  .datewrap { position:relative; display:inline-block; }
+  .pill { background:rgba(0,0,0,.08); border-radius:7px; padding:2px 9px; margin:0 -3px; }
+  .cal { position:absolute; top:calc(100% + 14px); left:-10px; z-index:6; width:330px;
+         background:#fff; border:1px solid rgba(0,0,0,.08); border-radius:15px; padding:17px 19px 19px;
+         box-shadow:0 22px 58px rgba(20,28,40,.42); }
+  .cal::before { content:""; position:absolute; top:-9px; left:40px; width:16px; height:16px; background:#fff;
+                 border-left:1px solid rgba(0,0,0,.08); border-top:1px solid rgba(0,0,0,.08); transform:rotate(45deg); }
+  .cal .chead { display:flex; align-items:center; justify-content:space-between; margin-bottom:13px; }
+  .cal .cmon { font-size:23px; font-weight:700; color:#1c1c1e; letter-spacing:-.2px; }
+  .cal .cnav { display:flex; gap:14px; color:var(--accent); }
+  .cal .grid { display:grid; grid-template-columns:repeat(7,1fr); gap:5px 0; text-align:center; }
+  .cal .wd { font-size:16px; font-weight:600; color:#a2a2a8; padding-bottom:5px; }
+  .cal .d { font-size:19px; color:#2c2c2e; padding:7px 0; border-radius:9px; }
+  .cal .d.mut { color:#c9c9ce; }
+  .cal .d.sel { background:var(--accent); color:#fff; font-weight:600; }
 </style>
 </head>
 <body class="gallery">
@@ -213,7 +233,7 @@
     <div class="divider"></div>
 
     <div class="ghead"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg><span class="dot" style="background:var(--p2)"></span>P2 <span class="count">(1)</span></div>
-    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Read Fabric governance guide</div><div class="meta">Work</div></div></div>
+    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Read Fabric governance guide</div><div class="meta"><span class="nodate">+ date</span> · Work</div></div></div>
     <div class="divider"></div>
 
     <div class="ghead np"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>No priority <span class="count">(4)</span></div>
@@ -377,7 +397,7 @@
     <div class="divider"></div>
     <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Update group cashflow model</div><div class="meta"><span class="mdot" style="background:var(--p1)"></span>P1 · 11 Jul · Work</div></div></div>
     <div class="divider"></div>
-    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Read Fabric governance guide</div><div class="meta"><span class="mdot" style="background:var(--p2)"></span>P2 · Home</div></div></div>
+    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Read Fabric governance guide</div><div class="meta"><span class="mdot" style="background:var(--p2)"></span>P2 · <span class="nodate">+ date</span> · Home</div></div></div>
     <div class="divider"></div>
   </div>
 </div>
@@ -423,7 +443,7 @@
     <div class="divider"></div>
 
     <div class="ghead"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg><span class="dot" style="background:var(--p2)"></span>P2 <span class="count">(1)</span></div>
-    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Read Fabric governance guide</div><div class="meta">Work</div></div></div>
+    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Read Fabric governance guide</div><div class="meta"><span class="nodate">+ date</span> · Work</div></div></div>
     <div class="divider"></div>
 
     <div class="ghead np"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>No priority <span class="count">(4)</span></div>
@@ -508,6 +528,62 @@
       <div class="gap"></div>
       <div class="ln dim">Starting Claude Code…<span class="cur"></span></div>
     </div>
+  </div>
+</div>
+
+<!-- ============ SCENE: reschedule (#46 click the due date) ============ -->
+<div class="scene light" data-scene="reschedule" style="height:640px">
+  <div class="desk"></div>
+  <div class="bar">
+    <span class="appicon sel">
+      <svg width="30" height="24" viewBox="0 0 28 22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5l2.5 2.5L9 3"/><path d="M13 5h13"/><path d="M2 13l2.5 2.5L9 11"/><path d="M13 13h13"/></svg>
+      <span>2</span>
+    </span>
+    <svg width="30" height="22" viewBox="0 0 24 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 6a15 15 0 0 1 20 0"/><path d="M5.5 9.5a10 10 0 0 1 13 0"/><path d="M9 13a5 5 0 0 1 6 0"/><circle cx="12" cy="16.2" r="1.1" fill="currentColor" stroke="none"/></svg>
+    <svg width="38" height="20" viewBox="0 0 32 15" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="1" y="1.5" width="26" height="12" rx="3"/><rect x="3.4" y="3.9" width="17" height="7.2" rx="1.4" fill="currentColor" stroke="none"/><rect x="28.4" y="5.2" width="2.6" height="4.6" rx="1" fill="currentColor" stroke="none"/></svg>
+    <span class="clock">Sat 4 Jul&nbsp;&nbsp;12:04</span>
+  </div>
+
+  <div class="panel">
+    <div class="phead">
+      <span class="ptitle">Pivotal Priorities</span>
+      <svg class="tchev" width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>
+      <span class="spacer"></span>
+      <span class="hicons">
+        <svg width="30" height="30" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
+        <svg width="27" height="27" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="7" cy="7" r="4.3"/><path d="M10.2 10.2l3.4 3.4"/></svg>
+        <svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.7-3.98"/><path d="M13.6 3.1v3.1h-3.1"/></svg>
+        <svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"><circle cx="12" cy="12" r="2.7"/><path d="M19.4 13a7.8 7.8 0 000-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 00-1.7-1L15 2.5h-4l-.3 2.4a7.6 7.6 0 00-1.7 1l-2.5-1-2 3.5L6.6 11a7.8 7.8 0 000 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1l.3 2.4h4l.3-2.4c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5z"/></svg>
+      </span>
+    </div>
+
+    <div class="ghead"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg><span class="dot" style="background:var(--p0)"></span>P0 <span class="count">(2)</span></div>
+    <div class="row">
+      <span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span>
+      <div class="rmain">
+        <div class="rtitle">Finalise Q3 credit proposal</div>
+        <div class="meta"><span class="datewrap"><span class="overdue pill">Overdue</span><div class="cal">
+          <div class="chead">
+            <span class="cmon">July 2026</span>
+            <span class="cnav">
+              <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10 4L6 8l4 4"/></svg>
+              <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>
+            </span>
+          </div>
+          <div class="grid">
+            <span class="wd">M</span><span class="wd">T</span><span class="wd">W</span><span class="wd">T</span><span class="wd">F</span><span class="wd">S</span><span class="wd">S</span>
+            <span class="d mut">29</span><span class="d mut">30</span><span class="d">1</span><span class="d">2</span><span class="d">3</span><span class="d">4</span><span class="d">5</span>
+            <span class="d">6</span><span class="d">7</span><span class="d">8</span><span class="d">9</span><span class="d">10</span><span class="d">11</span><span class="d">12</span>
+            <span class="d">13</span><span class="d">14</span><span class="d sel">15</span><span class="d">16</span><span class="d">17</span><span class="d">18</span><span class="d">19</span>
+            <span class="d">20</span><span class="d">21</span><span class="d">22</span><span class="d">23</span><span class="d">24</span><span class="d">25</span><span class="d">26</span>
+            <span class="d">27</span><span class="d">28</span><span class="d">29</span><span class="d">30</span><span class="d">31</span><span class="d mut">1</span><span class="d mut">2</span>
+          </div>
+        </div></span> · Work</div>
+      </div>
+    </div>
+    <div class="divider"></div>
+    <div class="row"><span class="cbx"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9.3"/></svg></span><div class="rmain"><div class="rtitle">Send board pack to directors</div><div class="meta"><span class="today">Today</span> · Work</div></div></div>
+    <div class="divider"></div>
   </div>
 </div>
 

@@ -11,6 +11,7 @@ SRC="file://$(pwd)/mockups.html"
 # scene:height (width is always 920)
 scenes=(
   "task-list:960"
+  "reschedule:640"
   "search:600"
   "quick-add:600"
   "quick-capture:440"

@@ -37,6 +37,13 @@ tasks that are late or due today. Click it to drop the task panel:
     </td>
   </tr>
   <tr>
+    <td colspan="2" align="center">
+      <img src="docs/images/reschedule.png" width="460"
+           alt="A task row 'Finalise Q3 credit proposal' with its red 'Overdue' due date highlighted by a subtle pill; a graphical month calendar for July 2026 has popped up anchored directly beneath the date, with the 15th selected in accent blue, ready to reschedule the task to a new day">
+      <br><b>Reschedule</b> — click a task's due date (or the faint <b>+ date</b> on an undated task) to pop a calendar right where you clicked and pick a new day; it writes straight back to Notion. Clearing a date lives in the ⋯ → Reschedule menu.
+    </td>
+  </tr>
+  <tr>
     <td width="50%" valign="top">
       <img src="docs/images/quick-add.png" width="100%"
            alt="The quick-add composer: a title field with Priority, Category and Due chips, and Cancel / Add buttons">
