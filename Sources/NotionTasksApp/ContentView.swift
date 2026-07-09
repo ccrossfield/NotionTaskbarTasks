@@ -540,6 +540,7 @@ struct ContentView: View {
                 ScrollView {
                     listContent(groups, grouped: grouped)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(OverlayScrollers())
                 }
                 .frame(maxHeight: .infinity)
             }
@@ -794,16 +795,15 @@ struct ContentView: View {
 
     /// The row's trailing controls (#35): a Claude-Code launch icon and the
     /// actions menu, bare at rest and revealed together on hover. Revealed via
-    /// opacity, not conditional removal, so the actions menu keeps its layout
-    /// slot - the reschedule popover anchors to it, and the row height mustn't
-    /// jump on hover. Kept visible while this row's date popover is open, or the
-    /// pointer moving onto the popover would flicker the trigger out. A
-    /// provisional quick-capture row (#37) shows nothing: it has no real page to
-    /// launch or act on yet.
+    /// opacity, not conditional removal, so the row height mustn't jump on
+    /// hover. A provisional quick-capture row (#37) shows nothing: it has no
+    /// real page to launch or act on yet. (The reschedule popover used to anchor
+    /// to the actions menu, which pinned it visible while open; since #46 it
+    /// anchors to the always-present due control, so the reveal is plain hover.)
     @ViewBuilder
     private func trailingControls(for task: NotionTask) -> some View {
         if !task.isProvisional {
-            let revealed = hoveredRowID == task.id || datePickerTaskID == task.id
+            let revealed = hoveredRowID == task.id
             HStack(spacing: 12) {
                 workInClaudeButton(for: task)
                 rowActionsMenu(for: task)
@@ -917,27 +917,31 @@ struct ContentView: View {
     }
 
     /// Line 2: Priority · Due date · Category, with absent fields omitted so
-    /// there are no stray separators. Renders nothing when all are absent.
-    /// `showPriority` is false in grouped views, where the header carries it.
+    /// there are no stray separators. `showPriority` is false in grouped views,
+    /// where the header carries it.
     ///
-    /// The due date is its own `Text` so it alone carries the urgency tint
-    /// (#25, ADR-0003); the separators and category stay secondary grey.
+    /// The due slot renders on every non-provisional row (#46): the real date,
+    /// or a faint "+ date" when unset, so the reschedule control is always there
+    /// to click. A provisional row (#37) has no page yet, so it only shows a
+    /// date when it already has one and never the placeholder.
     @ViewBuilder
     private func metadata(for task: NotionTask, showPriority: Bool) -> some View {
         let due = task.relativeDueText()
         let withPriority = showPriority && task.priority != nil
-        if withPriority || due != nil || task.category != nil {
+        let showsDue = !task.isProvisional || due != nil
+        let hasCategory = task.category != nil
+        if withPriority || showsDue || hasCategory {
             HStack(spacing: 5) {
                 if withPriority, let priority = task.priority {
                     Circle()
                         .fill(colour(for: priority))
                         .frame(width: 7, height: 7)
                     Text(priority)
-                    if due != nil || task.category != nil { Text("·") }
+                    if showsDue || hasCategory { Text("·") }
                 }
-                if let due {
-                    dueText(due, bucket: task.dueBucket())
-                    if task.category != nil { Text("·") }
+                if showsDue {
+                    dueControl(for: task)
+                    if hasCategory { Text("·") }
                 }
                 if let category = task.category {
                     Text(category)
@@ -961,6 +965,106 @@ struct ContentView: View {
                 .foregroundStyle(tint)
         } else {
             Text(text)
+        }
+    }
+
+    /// The due segment as a reschedule trigger (#46). Clicking opens the #33
+    /// calendar popover — now anchored here rather than on the ⋯ menu — seeded
+    /// to the current due date (or today when unset). Built as a plain Button so
+    /// VoiceOver and the keyboard get it for free. On a provisional row (#37)
+    /// there's no page to write to yet, so it falls back to plain, inert text.
+    @ViewBuilder
+    private func dueControl(for task: NotionTask) -> some View {
+        let due = task.relativeDueText()
+        if task.isProvisional {
+            if let due { dueText(due, bucket: task.dueBucket()) }
+        } else {
+            Button {
+                draftDueDate = task.dueDate ?? Calendar.current.startOfDay(for: Date())
+                datePickerTaskID = task.id
+            } label: {
+                DueChip(text: due ?? "+ date",
+                        bucket: task.dueBucket(),
+                        isPlaceholder: due == nil)
+            }
+            .buttonStyle(.plain)
+            .help(due == nil ? "Set a due date" : "Click to reschedule")
+            .accessibilityLabel(due.map { "Reschedule, due \($0)" } ?? "Set a due date")
+            // The calendar popover anchors to the due control (always in the
+            // row) and presents when this row is the one being rescheduled —
+            // from a click here or the ⋯ menu's "Pick a date…" (#46).
+            .popover(isPresented: Binding(
+                get: { datePickerTaskID == task.id },
+                set: { if !$0 { datePickerTaskID = nil } })) {
+                dateEditor(for: task)
+            }
+        }
+    }
+
+    /// Pins the panel's list to auto-hiding overlay scrollers. macOS's default
+    /// "Automatic" scroll-bar setting switches to persistent *legacy* scrollers
+    /// the moment a mouse is attached, which in a compact menu-bar panel leaves
+    /// an ugly bar parked down the side of a long list. Forcing the enclosing
+    /// `NSScrollView` to `.overlay` restores the show-on-scroll-then-fade
+    /// behaviour whether the pointer is a trackpad or a mouse. A no-op if the
+    /// scroll view can't be found (the bar just falls back to system default).
+    private struct OverlayScrollers: NSViewRepresentable {
+        func makeNSView(context: Context) -> NSView { NSView() }
+        func updateNSView(_ nsView: NSView, context: Context) {
+            // The document view isn't attached to its scroll view on the first
+            // layout pass, so resolve it on the next runloop tick. Skip when it's
+            // already overlay, so the frequent SwiftUI updates (poll refresh,
+            // hover churn) don't queue redundant main-thread work.
+            DispatchQueue.main.async {
+                guard let scrollView = nsView.enclosingScrollView,
+                      scrollView.scrollerStyle != .overlay else { return }
+                scrollView.scrollerStyle = .overlay
+            }
+        }
+    }
+
+    /// The due date's visual (#46): the tinted relative date, or a faint
+    /// "+ date" placeholder. Tracks its own hover so the reschedule pill and the
+    /// pointing-hand cursor stay confined to the date, not the whole row.
+    private struct DueChip: View {
+        let text: String
+        let bucket: DueBucket
+        let isPlaceholder: Bool
+        @State private var hovering = false
+
+        var body: some View {
+            // A constant horizontal inset only — no negative padding — so the
+            // chip's measured size never changes between rest and hover. Hover
+            // toggles the fill alone, which can't reflow the row or re-flash the
+            // scroll indicator. Vertical inset stays zero so the row height is
+            // identical to the old plain due text (#46).
+            styledText
+                .padding(.horizontal, 5)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(Color.primary.opacity(hovering ? 0.09 : 0)))
+                .contentShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .onHover { inside in
+                    hovering = inside
+                    // Stackless `set()`, not `push()/pop()`: an identity-preserving
+                    // refresh can rebuild the row under the pointer without firing
+                    // `onHover(false)`, which would strand a pushed cursor on the
+                    // global stack (and cross-view pops are position-agnostic).
+                    // `set()` is idempotent; the OS re-evaluates it on the next move.
+                    (inside ? NSCursor.pointingHand : NSCursor.arrow).set()
+                }
+        }
+
+        @ViewBuilder private var styledText: some View {
+            if let tint = isPlaceholder ? nil : DueColor.tint(for: bucket) {
+                Text(text)
+                    .fontWeight(bucket == .overdue ? .semibold : .regular)
+                    .foregroundStyle(tint)
+            } else if isPlaceholder {
+                Text(text).foregroundStyle(.tertiary)
+            } else {
+                Text(text)
+            }
         }
     }
 
@@ -1003,13 +1107,6 @@ struct ContentView: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        // The calendar popover anchors to this row's control and presents only
-        // when this row's "Pick a date…" was chosen.
-        .popover(isPresented: Binding(
-            get: { datePickerTaskID == task.id },
-            set: { if !$0 { datePickerTaskID = nil } })) {
-            dateEditor(for: task)
-        }
     }
 
     /// The Status submenu (#33): the selectable statuses, checkmarked on the
@@ -1101,8 +1198,11 @@ struct ContentView: View {
         DatePicker("Due date", selection: $draftDueDate, displayedComponents: .date)
             .datePickerStyle(.graphical)
             .labelsHidden()
-            .padding()
-            .frame(minWidth: 260)
+            // The graphical picker expands to whatever it's offered; `fixedSize`
+            // pins it to its natural calendar size so the popover hugs it
+            // instead of wrapping it in a large empty box (#46).
+            .fixedSize()
+            .padding(10)
             .onChange(of: draftDueDate) { _, newDate in
                 Task { await model.setDueDate(taskID: task.id, to: newDate) }
                 datePickerTaskID = nil
