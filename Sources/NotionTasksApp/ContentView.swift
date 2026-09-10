@@ -624,7 +624,6 @@ struct ContentView: View {
                 if !grouped || isFilteringBySearch || !model.isCollapsed(group.priority) {
                     ForEach(group.tasks) { task in
                         row(for: task, showPriority: !grouped)
-                            .padding(.vertical, 6)
                             .transition(reduceMotion ? .identity : .opacity)
                         Divider()
                     }
@@ -780,6 +779,12 @@ struct ContentView: View {
         .accessibilityLabel(collapsed ? "Expand group" : "Collapse group")
     }
 
+    /// The breathing room above and below a row's text. Applied inside the row
+    /// rather than around it so the complete button can stretch over the whole
+    /// row pitch (#48): its hit area runs divider to divider while the glyph
+    /// stays level with the title's first line.
+    private static let rowInset: CGFloat = 6
+
     private func row(for task: NotionTask, showPriority: Bool = true) -> some View {
         HStack(alignment: .top, spacing: 8) {
             completeButton(for: task)
@@ -787,8 +792,10 @@ struct ContentView: View {
                 title(for: task)
                 metadata(for: task, showPriority: showPriority)
             }
+            .padding(.vertical, Self.rowInset)
             Spacer(minLength: 8)
             trailingControls(for: task)
+                .padding(.top, Self.rowInset)
         }
         .contentShape(Rectangle())
         // Hover reveals the trailing controls (#35). Only clear on leave if this
@@ -926,6 +933,12 @@ struct ContentView: View {
                 .foregroundStyle(ticked ? Color.green : Color.primary)
                 .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
                 .symbolEffect(.bounce, value: reduceMotion ? false : ticked)
+                // The glyph stays level with the title's first line; the
+                // clickable area is the whole row height (#48). A 13pt circle
+                // was the only target in a 47pt row.
+                .padding(.top, Self.rowInset)
+                .frame(maxHeight: .infinity, alignment: .top)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(task.isProvisional)
