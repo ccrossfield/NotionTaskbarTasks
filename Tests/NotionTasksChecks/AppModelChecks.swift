@@ -1975,14 +1975,80 @@ func appModelChecks(_ t: CheckRun) async {
                  "composer absorbs the key")
         t.expect(!composing.isSearching, "search does not open over the composer")
 
-        // Search already open: the key flows to the focused search field, so
-        // the monitor must not consume it (which would drop it) or reseed.
+        // Search open and its field ready: the key flows to the focused search
+        // field, so the monitor must not consume it (which would drop it) or
+        // reseed.
         let searching = try await searchModel()
         searching.openSearch()
+        searching.searchFieldReady()
         searching.setSearch("wi")
         t.expect(!searching.beginTypeAheadSearch(characters: "r", commandDown: false, controlDown: false),
                  "an open search does not re-trigger")
         t.expectEqual(searching.searchText, "wi") // untouched — the field appends 'r' itself
+    }
+
+    // Fast typing after the seed (#49). Between the seed and the field actually
+    // owning the keyboard (SwiftUI builds the row, focus lands, AppKit's
+    // focus select-all is undone) there are several run-loop hops — hundreds
+    // of milliseconds with a long list. Keys landing in that gap used to fall
+    // through the monitor and vanish, or replace the selected seed. The model
+    // now buffers them until the view reports the field is ready.
+    await t.test("keys typed before the search field is ready are appended in order, not dropped") {
+        let model = try await searchModel()
+        t.expect(model.beginTypeAheadSearch(characters: "q", commandDown: false, controlDown: false), "seed")
+        t.expect(model.beginTypeAheadSearch(characters: "w", commandDown: false, controlDown: false),
+                 "second key is consumed while the field isn't ready")
+        t.expect(model.beginTypeAheadSearch(characters: "e", commandDown: false, controlDown: false),
+                 "third key is consumed too")
+        t.expectEqual(model.searchText, "qwe")
+    }
+
+    await t.test("backspace before the field is ready removes the last buffered character") {
+        let model = try await searchModel()
+        _ = model.beginTypeAheadSearch(characters: "q", commandDown: false, controlDown: false)
+        _ = model.beginTypeAheadSearch(characters: "w", commandDown: false, controlDown: false)
+        t.expect(model.beginTypeAheadSearch(characters: "\u{7F}", commandDown: false, controlDown: false),
+                 "backspace is consumed rather than reaching a select-all'd field")
+        t.expectEqual(model.searchText, "q")
+        // Backspacing past empty is a no-op, not a crash, and still consumed.
+        _ = model.beginTypeAheadSearch(characters: "\u{7F}", commandDown: false, controlDown: false)
+        t.expect(model.beginTypeAheadSearch(characters: "\u{7F}", commandDown: false, controlDown: false),
+                 "still consumed on empty")
+        t.expectEqual(model.searchText, "")
+        t.expect(model.isSearching, "search stays open")
+    }
+
+    await t.test("once the field is ready, keys are left to it") {
+        let model = try await searchModel()
+        _ = model.beginTypeAheadSearch(characters: "q", commandDown: false, controlDown: false)
+        model.searchFieldReady()
+        t.expect(!model.beginTypeAheadSearch(characters: "w", commandDown: false, controlDown: false),
+                 "the field appends its own keys now")
+        t.expectEqual(model.searchText, "q")
+    }
+
+    await t.test("search opened by ⌘F or the icon buffers keys the same way until its field is ready") {
+        let model = try await searchModel()
+        model.openSearch()
+        t.expect(model.beginTypeAheadSearch(characters: "a", commandDown: false, controlDown: false),
+                 "a key typed straight after ⌘F is kept")
+        t.expectEqual(model.searchText, "a")
+        model.searchFieldReady()
+        t.expect(!model.beginTypeAheadSearch(characters: "b", commandDown: false, controlDown: false),
+                 "then the field owns typing")
+    }
+
+    await t.test("closing the search ends the buffering; the next key seeds a fresh search") {
+        let model = try await searchModel()
+        _ = model.beginTypeAheadSearch(characters: "q", commandDown: false, controlDown: false)
+        model.closeSearch()
+        t.expect(model.beginTypeAheadSearch(characters: "z", commandDown: false, controlDown: false),
+                 "a key after close seeds again")
+        t.expectEqual(model.searchText, "z")
+        // Non-typing keys are still ignored while buffering.
+        t.expect(!model.beginTypeAheadSearch(characters: "\r", commandDown: false, controlDown: false),
+                 "Return isn't buffered")
+        t.expectEqual(model.searchText, "z")
     }
 
     t.suite("AppModel sole search result (#42)")

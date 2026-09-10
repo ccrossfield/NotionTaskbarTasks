@@ -104,6 +104,15 @@ public final class AppModel: ObservableObject {
     /// preset switch, though, so widening a fruitless search to All open is one
     /// tap rather than a retype.
     @Published public private(set) var searchText = ""
+    /// True from the moment a search opens until the view reports that its
+    /// field owns the keyboard, with the caret placed after the text (#49).
+    /// While true, `beginTypeAheadSearch` buffers typing keys into
+    /// `searchText` itself: between the seed and that report there are several
+    /// run-loop hops (SwiftUI builds the row and reflows the list, focus lands,
+    /// AppKit's focus select-all is undone), hundreds of milliseconds on a long
+    /// list, and a raw key in that gap either fell through to nothing or
+    /// replaced the selected seed.
+    public private(set) var searchFieldPending = false
     /// The global quick-capture shortcut (#34). Restored from preferences at
     /// launch (defaulting to ⌥Space) and changed via `setHotKey`; the gear menu
     /// reads it and the shell registers it.
@@ -562,6 +571,7 @@ public final class AppModel: ObservableObject {
     public func openSearch() {
         closeComposer()
         isSearching = true
+        searchFieldPending = true
     }
 
     /// Close the search row and clear the query (#32). One call for every exit
@@ -570,7 +580,13 @@ public final class AppModel: ObservableObject {
     public func closeSearch() {
         isSearching = false
         searchText = ""
+        searchFieldPending = false
     }
+
+    /// The view's report that the search field has keyboard focus and its
+    /// caret sits after the text (#49). From here on typing goes to the field
+    /// itself; `beginTypeAheadSearch` stops buffering.
+    public func searchFieldReady() { searchFieldPending = false }
 
     /// The header icon toggles the search row (#32).
     public func toggleSearch() {
@@ -604,22 +620,44 @@ public final class AppModel: ObservableObject {
     /// A plain keystroke in the open, focused panel opens the search row and
     /// seeds it with that character (#41) — Spotlight-style type-ahead. Returns
     /// `true` when the key was consumed, so the shell's key monitor can swallow
-    /// it (the now-focused field takes over from the next keystroke on).
+    /// it.
     ///
-    /// Suppressed when a text field already owns the keyboard — an inline rename
-    /// (#28), the composer (#22), or an already-open search (#32) — and when
-    /// Command or Control is held, so shortcuts like ⌘F still reach their own
-    /// handlers. Shift and Option stay allowed: capitals, symbols, and
-    /// Option-accented input all type through.
+    /// Until the view reports the field ready (`searchFieldPending`, #49), the
+    /// keys that follow are consumed too: typing appends to `searchText`,
+    /// Backspace removes its last character. Typed fast, those keys used to land
+    /// before the field existed (and vanish) or while AppKit's focus select-all
+    /// held the seed (and replace it). Once the field is ready it owns typing
+    /// and this returns `false`.
+    ///
+    /// Suppressed when another text field owns the keyboard — an inline rename
+    /// (#28) or the composer (#22) — and when Command or Control is held, so
+    /// shortcuts like ⌘F still reach their own handlers. Shift and Option stay
+    /// allowed: capitals, symbols, and Option-accented input all type through.
     public func beginTypeAheadSearch(characters: String?,
                                      commandDown: Bool,
                                      controlDown: Bool) -> Bool {
-        guard editingTaskID == nil, !isComposing, !isSearching else { return false }
+        guard editingTaskID == nil, !isComposing else { return false }
         guard !commandDown, !controlDown else { return false }
+        if isSearching {
+            guard searchFieldPending else { return false } // the field owns typing now
+            if Self.isBackspace(characters) {
+                if !searchText.isEmpty { searchText.removeLast() }
+                return true
+            }
+            guard let typed = Self.typeAheadCharacter(from: characters) else { return false }
+            searchText += typed
+            return true
+        }
         guard let seed = Self.typeAheadCharacter(from: characters) else { return false }
         openSearch()
         searchText = seed
         return true
+    }
+
+    /// The Backspace key as `NSEvent.characters` reports it: a lone DEL (0x7F).
+    /// Forward Delete arrives in the function-key block and is not typing.
+    private static func isBackspace(_ characters: String?) -> Bool {
+        characters?.unicodeScalars.first?.value == 0x7F && characters?.unicodeScalars.count == 1
     }
 
     /// Open the quick-add composer (#22). Messages from the previous

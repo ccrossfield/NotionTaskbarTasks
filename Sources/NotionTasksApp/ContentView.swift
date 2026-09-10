@@ -306,6 +306,10 @@ struct ContentView: View {
                             if let editor = NSApp.keyWindow?.firstResponder as? NSText {
                                 let end = (editor.string as NSString).length
                                 editor.selectedRange = NSRange(location: end, length: 0)
+                                // Only now does the field own typing (#49):
+                                // until this point the model has been
+                                // buffering fast keystrokes into the query.
+                                model.searchFieldReady()
                             }
                         }
                     }
