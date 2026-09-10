@@ -43,27 +43,6 @@ private final class KeyPanel: NSPanel {
     override func cancelOperation(_ sender: Any?) { onCancel?() }
 }
 
-/// Reports SwiftUI content-size changes upward so the window can follow:
-/// state transitions (token entry ↔ loaded ↔ failed, error captions coming
-/// and going) change the panel's height while it is open.
-private final class PanelHostingView: NSHostingView<AnyView> {
-    var onSizeChange: (() -> Void)?
-
-    override func invalidateIntrinsicContentSize() {
-        super.invalidateIntrinsicContentSize()
-        onSizeChange?()
-    }
-
-    required init(rootView: AnyView) {
-        super.init(rootView: rootView)
-    }
-
-    @available(*, unavailable)
-    @objc required dynamic init?(coder: NSCoder) {
-        fatalError("init(coder:) is not supported")
-    }
-}
-
 /// The AppKit shell (#20): an `NSStatusItem` owned here instead of a SwiftUI
 /// `MenuBarExtra` scene, because `MenuBarExtra` cannot tell right-click from
 /// left-click. Left-click toggles the panel hosting the existing `ContentView`;
@@ -104,7 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private var statusItem: NSStatusItem?
     private var panel: TaskPanel?
-    private var hostingView: PanelHostingView?
+    private var hostingView: NSHostingView<AnyView>?
     // The quick-capture window (#34): a second floating panel, independent of
     // the status-icon panel. Built once and repositioned on each open.
     private var capturePanel: KeyPanel?
@@ -129,7 +108,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // window this shell replaces — menu material, continuous rounded corners,
     // a hairline gap below the menu bar, no popover arrow, no animation.
     private static let cornerRadius: CGFloat = 16
-    private static let menuBarGap: CGFloat = 4
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -351,7 +329,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// Build once, reuse across opens: keeps SwiftUI view state (the token
     /// field's draft) and spares a hosting-view rebuild per click.
     private func makePanel() -> TaskPanel {
-        let hosting = PanelHostingView(rootView: AnyView(
+        let hosting = NSHostingView(rootView: AnyView(
             ContentView(
                 onRecordShortcut: { [weak self] in self?.beginRecordingHotKey(.quickCapture) },
                 onRecordPanelShortcut: { [weak self] in self?.beginRecordingHotKey(.showPanel) },
@@ -359,14 +337,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 onChooseWorkspace: { [weak self] in self?.chooseClaudeWorkspace() })
                 .environmentObject(model)))
         hosting.translatesAutoresizingMaskIntoConstraints = false
-        hosting.onSizeChange = { [weak self] in
-            // Deferred: invalidation arrives mid-layout, and setFrame from
-            // inside a layout pass re-enters it.
-            DispatchQueue.main.async {
-                guard let self, let panel = self.panel, panel.isVisible else { return }
-                self.layoutPanel(panel)
-            }
-        }
+        // The panel's frame is set from screen geometry (#47), not from the
+        // content's ideal size, so the hosting view must not push size
+        // constraints of its own into the window.
+        hosting.sizingOptions = []
 
         let effect = NSVisualEffectView()
         effect.material = .menu
@@ -405,18 +379,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return panel
     }
 
-    /// Attach the panel directly beneath the icon, centred and clamped to the
-    /// screen edge, top-anchored so content growth extends downward.
+    /// Place the panel as a sidebar (#47): just under the menu bar, down to the
+    /// Dock or screen bottom, from beneath the icon out to the screen's right
+    /// edge. The rect maths is `PanelGeometry` (Core, checked); this only
+    /// gathers the two input frames from AppKit.
     private func layoutPanel(_ panel: NSPanel) {
-        guard let button = statusItem?.button, let buttonWindow = button.window else { return }
-        let size = hostingView?.fittingSize ?? panel.frame.size
+        guard let button = statusItem?.button, let buttonWindow = button.window,
+              let visible = (buttonWindow.screen ?? NSScreen.main)?.visibleFrame else { return }
         let iconFrame = buttonWindow.convertToScreen(button.convert(button.bounds, to: nil))
-        let visible = (buttonWindow.screen ?? NSScreen.main)?.visibleFrame
-            ?? NSRect(origin: .zero, size: size)
-        var x = iconFrame.midX - size.width / 2
-        x = max(visible.minX + 8, min(x, visible.maxX - size.width - 8))
-        let y = iconFrame.minY - Self.menuBarGap - size.height
-        panel.setFrame(NSRect(x: x, y: y, width: size.width, height: size.height),
+        panel.setFrame(PanelGeometry.frame(iconFrame: iconFrame, visibleFrame: visible),
                        display: true)
     }
 

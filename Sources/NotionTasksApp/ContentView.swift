@@ -1,6 +1,22 @@
 import SwiftUI
 import NotionTasksCore
 
+/// The panel's type scale (#47). The 340pt dropdown used menu-sized defaults
+/// (13pt titles, 10pt metadata); the full-height sidebar has room for a notch
+/// more, so rows are 15/12 and the headers match. Pinned point sizes rather
+/// than text styles: macOS doesn't scale text styles, so nothing is lost, and
+/// the four sizes read as one decision here instead of scattered `.caption`s.
+private enum PanelFont {
+    /// Row titles and the inline rename field.
+    static let title = Font.system(size: 15)
+    /// The row's Priority · Due · Category line.
+    static let meta = Font.system(size: 12)
+    /// Priority group headers.
+    static let section = Font.system(size: 12, weight: .semibold)
+    /// The view-picker title in the panel header.
+    static let heading = Font.system(size: 15, weight: .semibold)
+}
+
 struct ContentView: View {
     /// Opens the shell's quick-capture shortcut recorder (#34). The gear menu
     /// triggers it; recording lives in the shell (AppKit), not the view.
@@ -40,11 +56,6 @@ struct ContentView: View {
     /// task's current due date when the popover opens.
     @State private var draftDueDate = Date()
 
-    /// Fixed height for the loaded content region (controls + list). The
-    /// MenuBarExtra window doesn't reliably resize to changing content, so a
-    /// constant height gives it one size to adopt; the list scrolls inside it.
-    private let loadedHeight: CGFloat = 380
-
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -80,7 +91,9 @@ struct ContentView: View {
                     }
                     taskList
                 }
-                .frame(height: loadedHeight)
+                // Take whatever height the panel gives (#47): the shell sizes
+                // the window to the screen, and the list scrolls inside.
+                .frame(maxHeight: .infinity)
             case .failed(let message):
                 failure(message)
             }
@@ -120,7 +133,10 @@ struct ContentView: View {
 
         }
         .padding(12)
-        .frame(width: 340)
+        // Fill the panel (#47). The window is a full-height sidebar sized by
+        // the shell from screen geometry, so nothing here fixes a size; the
+        // shorter states (token entry, loading, failure) sit at the top.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     /// The view picker doubles as the panel title: it shows the active view and
@@ -151,7 +167,7 @@ struct ContentView: View {
             }
         } label: {
             HStack(spacing: 4) {
-                Text(model.activeTitle).font(.headline)
+                Text(model.activeTitle).font(PanelFont.heading)
                 Image(systemName: "chevron.down").font(.caption2)
             }
         }
@@ -527,11 +543,10 @@ struct ContentView: View {
     private var taskList: some View {
         let groups = model.groups()
         let grouped = model.isGrouped
-        // Always scroll inside the fixed region set in `body`. The MenuBarExtra
-        // window doesn't reliably resize to changing content, so a self-sizing
-        // list gets clipped by a too-small window and its lower rows vanish. A
-        // fixed panel height with the list scrolling inside keeps every row
-        // reachable — visible for short lists, scrollable for long ones.
+        // Always scroll inside the region `body` gives the loaded state. The
+        // window's height comes from the screen, not the content (#47), so a
+        // self-sizing list would be clipped and its lower rows would vanish; a
+        // scrolling list keeps every row reachable however long the view is.
         return Group {
             if groups.isEmpty {
                 emptyState
@@ -729,7 +744,7 @@ struct ContentView: View {
 
     /// A priority group's header, and the control that folds it (#19): the
     /// whole row is one full-width plain button — no precision chevron target
-    /// in a 340px panel. The leading chevron carries the affordance; the
+    /// to hunt for. The leading chevron carries the affordance; the
     /// count sits inline after the name in both states (#26), so nothing
     /// moves on toggle except the chevron and the rows. No animation: the
     /// panel should feel instant.
@@ -755,7 +770,7 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
             }
-            .font(.caption.weight(.semibold))
+            .font(PanelFont.section)
             .foregroundStyle(group.priority == nil ? Color.secondary : Color.primary)
             .padding(.top, 8)
             .padding(.bottom, 2)
@@ -841,6 +856,7 @@ struct ContentView: View {
             titleEditor(for: task)
         } else {
             Text(task.title)
+                .font(PanelFont.title)
                 .lineLimit(2)
                 .overlay(TitleClickRouter(
                     onLeftClick: { openInNotion(task) },
@@ -858,6 +874,7 @@ struct ContentView: View {
         TextField("Task name", text: Binding(
             get: { model.editingDraft },
             set: { model.setEditingDraft($0) }))
+            .font(PanelFont.title)
             .textFieldStyle(.roundedBorder)
             .lineLimit(1)
             .focused($editingFocused)
@@ -947,7 +964,7 @@ struct ContentView: View {
                     Text(category)
                 }
             }
-            .font(.caption)
+            .font(PanelFont.meta)
             .foregroundStyle(.secondary)
         }
     }
